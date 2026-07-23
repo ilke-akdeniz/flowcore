@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: flowcore-postgres
+    environment:
+      POSTGRES_USER: flowcore
+      POSTGRES_PASSWORD: flowcore
+      POSTGRES_DB: flowcore
+    ports:
+      - "5432:5432"
+    volumes:
+      - flowcore-pgdata:/var/lib/postgresql/data
+
+volumes:
+  flowcore-pgdata:

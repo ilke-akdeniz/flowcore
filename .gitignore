@@ -1,0 +1,18 @@
+# Binaries
+/flowcore
+*.exe
+
+# Env / local secrets
+.env
+.env.local
+
+# Test & coverage output
+*.out
+coverage.*
+
+# OS noise
+.DS_Store
+
+# Editor
+.vscode/*
+!.vscode/settings.json
