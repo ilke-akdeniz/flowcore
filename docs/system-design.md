@@ -1,7 +1,5 @@
 # Overview
-This document explains the initial system design of the library and the scope of first iteration.
-This is an overview, a starting point to discover important structure and move forward.
-We are not aiming for perfection or extensive discovery. 
+The evolving system design for FlowCore, and the scope of each iteration. This is the authoritative design document: boundary, flows, state, responsibilities, invariants, and trade-offs. It changes as decisions land — decisions are recorded here first, then implemented.
 
 # Boundary
 _What are we designing? What we are not designing?_
@@ -14,8 +12,7 @@ It would be straightforward for devs to use this library as a foundation for an 
 Library is "workflow subject" agnostic. Workflow subject could be a logo design or expense form. or...
 Library doesn't hold these subjects, it doesn't try to be a document store. 
    
-Library has it's own lightweight database instance (sqlite?), and migration scripts.
-Devs can use scripts to deploy the tables to their db instances.
+Library owns a Postgres schema and ships migrations for it. Devs run those migrations into their own Postgres instance; the tables are the library's source of truth for configuration and workflow state.
 
 Library is also identity-agnostic. It records who a step is assigned to and who completed it, but never interprets those identifiers and never enforces permissions. Group membership, roles and authorization policy live in the client system.
    
@@ -28,7 +25,10 @@ Caller: Client code that calls the library.
 Client System: The system that interacts with the Library via Caller. 
 
 # Flows
-What are the main user/system journeys? 
+_What are the main user/system journeys?_
+
+This is an overview, a starting point to discover important structure and move forward.
+We are not aiming for perfection or extensive discovery.  
  
 *Configure Workflow*
 Dev creates a new workflow configuration ("Expense Approval") and defines:
@@ -289,7 +289,12 @@ If engine-side enforcement is wanted later, the shape is a client-supplied check
 
 # Stack
 Go, Postgres, pgx v5 (native API), hand-written SQL in a repository layer, plain SQL migrations, tests against real Postgres.
-Open: migration tool (goose | golang-migrate), test Postgres provisioning (testcontainers | docker-compose), concurrency mechanism for step completion (version column | SELECT FOR UPDATE | serializable isolation — decide when writing the completion path).
+
+Migrations: goose (github.com/pressly/goose/v3). Chosen because FlowCore ships migrations for clients to run into their own Postgres, and goose serves both consumption paths from the same files — a CLI for local development, and an embedded programmatic entrypoint (embed.FS) so a client can apply migrations from application code without installing a tool. Its annotations are SQL comments, so the files remain runnable under plain psql by a client DBA. It also has no "dirty schema" state to clear by hand after a failed migration, which is the wrong burden to hand an operator of someone else's library.
+
+Migrations run over database/sql via the github.com/jackc/pgx/v5/stdlib adapter, since goose is written against database/sql. This is scoped to the migration path only: the repository layer uses pgxpool and the native pgx API. Same driver, two façades, at different moments.
+
+Open: test Postgres provisioning (testcontainers | docker-compose), concurrency mechanism for step completion (version column | SELECT FOR UPDATE | serializable isolation — decide when writing the completion path).
 
 
 # Iteration 1 Scope
