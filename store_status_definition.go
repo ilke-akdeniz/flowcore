@@ -1,0 +1,79 @@
+package flowcore
+
+import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+func rowToStatus(row pgx.CollectableRow) (WorkflowStatusDefinition, error) {
+	var s WorkflowStatusDefinition
+	err := row.Scan(&s.ID, &s.WorkflowDefinitionID, &s.Name)
+	return s, err
+}
+
+func insertStatus(ctx context.Context, q querier, s WorkflowStatusDefinition) error {
+	_, err := q.Exec(ctx,
+		`insert into flowcore.workflow_status_definition (id, workflow_definition_id, name)
+		 values ($1, $2, $3)`,
+		s.ID, s.WorkflowDefinitionID, s.Name)
+	return mapWriteErr(err, s.Name)
+}
+
+func getStatusRow(ctx context.Context, q querier, id uuid.UUID) (WorkflowStatusDefinition, error) {
+	var s WorkflowStatusDefinition
+	err := q.QueryRow(ctx,
+		`select id, workflow_definition_id, name from flowcore.workflow_status_definition where id = $1`,
+		id).Scan(&s.ID, &s.WorkflowDefinitionID, &s.Name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkflowStatusDefinition{}, &NotFoundError{Entity: entityStatus, ID: id}
+	}
+	if err != nil {
+		return WorkflowStatusDefinition{}, err
+	}
+	return s, nil
+}
+
+func listStatusesByDefinition(ctx context.Context, q querier, definitionID uuid.UUID) ([]WorkflowStatusDefinition, error) {
+	rows, err := q.Query(ctx,
+		`select id, workflow_definition_id, name from flowcore.workflow_status_definition
+		 where workflow_definition_id = $1 order by name`,
+		definitionID)
+	if err != nil {
+		return nil, err
+	}
+	statuses, err := pgx.CollectRows(rows, rowToStatus)
+	if err != nil {
+		return nil, err
+	}
+	if statuses == nil {
+		statuses = []WorkflowStatusDefinition{}
+	}
+	return statuses, nil
+}
+
+func updateStatus(ctx context.Context, q querier, id uuid.UUID, p UpdateStatusParams) error {
+	tag, err := q.Exec(ctx,
+		`update flowcore.workflow_status_definition set name = $2 where id = $1`,
+		id, p.Name)
+	if err != nil {
+		return mapWriteErr(err, p.Name)
+	}
+	if tag.RowsAffected() == 0 {
+		return &NotFoundError{Entity: entityStatus, ID: id}
+	}
+	return nil
+}
+
+func deleteStatus(ctx context.Context, q querier, id uuid.UUID) error {
+	tag, err := q.Exec(ctx, `delete from flowcore.workflow_status_definition where id = $1`, id)
+	if err != nil {
+		return mapDeleteErr(err, entityStatus, id)
+	}
+	if tag.RowsAffected() == 0 {
+		return &NotFoundError{Entity: entityStatus, ID: id}
+	}
+	return nil
+}
