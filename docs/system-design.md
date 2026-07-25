@@ -48,7 +48,7 @@ We are not aiming for perfection or extensive discovery.
 
 _A note on terminology:_ the configuration-side entities are **definitions** — a workflow definition is a template.
 A **workflow** is a running instance started from a definition.
-Definitions are edited through the `Definitions` component; instances are run by the `Engine`.
+Definitions are edited through the `Catalog` component; instances are run by the `Engine`.
 
 *Configure Workflow*
 Dev creates a new workflow definition ("Expense Approval") and defines:
@@ -162,12 +162,13 @@ Does any component emerge naturally?_
 - Who processes a step run request? => Engine
 - Who is the source of truth for current step run? => Engine
 
-*Definitions*
+*Catalog*
 - Provides ergonomic workflow definition generation for clients via an aggregate.
 - Collects the workflow definition needed for a workflow start.
 - Realized concretely by the exported `Definitions` type (constructed with `NewDefinitions(pool)`), holding the pool and owning definition-side transactions.
 - Create is the only aggregate write — the whole definition tree in one transaction.
   Everything else is granular per-entity CRUD.
+- Create accepts a whole definition tree and defaults the entry step to the first step when the caller leaves it unset; an explicitly-set entry step must reference a step in the tree, checked before the transaction. 
 - Update semantics are full-replace of an entity's own scalar columns, never a cascade into children: an Update owns exactly its own row, and children are managed through their own Add/Update/Delete methods.
   Parent-membership and identity columns are immutable; re-parenting is Delete + Add.
   Each mutating operation takes a dedicated params struct carrying only the columns it may set, so the contract is enforced by the input type's shape rather than by documentation; a read type's `ToUpdate()` pre-fills those params from current state.
@@ -194,9 +195,9 @@ Does any component emerge naturally?_
 
 # Diagram
 
-Client -- configure workflow --> Definitions
+Client -- configure workflow --> Catalog
 
-Client -- start workflow --> Engine -- get workflow definition --> Definitions
+Client -- start workflow --> Engine -- get workflow definition --> Catalog
 										   --> Engine -- save workflow, step, status --> DB
 										   --> Engine -- complete first step --> Step -- set current workflow status --> Workflow
 
@@ -354,7 +355,7 @@ This changes no tables and can be added when a real need appears.
 Go, Postgres, pgx v5 (native API), hand-written SQL in a repository layer, plain SQL migrations, tests against real Postgres.
 
 The library is a single package `flowcore` at the module root.
-Privacy comes from identifier case, not directory layout: the store — hand-written SQL and pgx calls — is unexported in its own files; the exported surface (`Definitions`, the definition types, the params structs, the error taxonomy) sits alongside it.
+Privacy comes from identifier case, not directory layout: the store — hand-written SQL and pgx calls — is unexported in its own files; the exported surface (`Catalog`, the definition types, the params structs, the error taxonomy) sits alongside it.
 `internal/` is not used; it buys nothing for a single-package module and would force a read/write type split with a mapping tax.
 
 IDs are UUIDv7, application-generated in Go before insert (`github.com/google/uuid`), `uuid` columns with no database default.
@@ -367,6 +368,7 @@ The idiom at every transaction site is `Begin` then an immediate `defer func() {
 Errors surface as a small typed taxonomy over the DB's rejections, mapped centrally: constraint violations are keyed on SQLSTATE plus the explicitly-named constraint, and because a referencing insert and a referenced delete are byte-identical at the FK level, the mapping is split by operation intent into a write path and a delete path.
 Every typed error wraps a sentinel so both `errors.Is` and `errors.As` work.
 This requires every constraint the mapper switches on — unique indexes, composite FKs, CHECKs — to be explicitly named in the migrations.
+Alongside these DB-mapped errors, Create performs pre-flight input checks that produce plain field-less sentinels (`ErrNoSteps`, `ErrInitialStepNotInTree`) before any transaction; these are `errors.Is`-matchable but have no typed form, since they map no DB rejection and carry no per-occurrence detail.
 
 Migrations: goose (github.com/pressly/goose/v3).
 Chosen because FlowCore ships migrations for clients to run into their own Postgres, and goose serves both consumption paths from the same files — a CLI for local development, and an embedded programmatic entrypoint (embed.FS) so a client can apply migrations from application code without installing a tool.

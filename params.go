@@ -2,7 +2,7 @@ package flowcore
 
 import "github.com/google/uuid"
 
-// Each mutating operation on Definitions takes a dedicated params struct
+// Each mutating operation on Catalog takes a dedicated params struct
 // carrying only the columns that operation may set. Identity and
 // parent-membership columns are deliberately absent: they cannot be changed, so
 // they are unrepresentable rather than validated. Update is a full replace of

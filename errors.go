@@ -31,6 +31,17 @@ var (
 	ErrInvalidAction = errors.New("flowcore: invalid action")
 	// ErrInvalidName is returned when a name is empty or too long.
 	ErrInvalidName = errors.New("flowcore: invalid name")
+
+	// ErrNoSteps and ErrInitialStepNotInTree are pre-flight input checks in
+	// Create, not mappings of a database rejection — so, like the others, they
+	// carry no fields.
+	//
+	// ErrNoSteps: the definition has no steps; an empty definition cannot be
+	// started.
+	ErrNoSteps = errors.New("flowcore: a definition must have at least one step")
+	// ErrInitialStepNotInTree: an explicit InitialStepDefinitionID does not match
+	// any step in the definition's Steps.
+	ErrInitialStepNotInTree = errors.New("flowcore: initial step is not one of the definition's steps")
 )
 
 // Entity labels carried on errors so a caller can name the offending kind.

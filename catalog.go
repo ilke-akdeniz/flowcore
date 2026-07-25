@@ -1,0 +1,336 @@
+package flowcore
+
+import (
+	"context"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// Catalog creates and edits workflow definitions. Create writes a whole
+// definition tree in one transaction; every other method is granular per-entity
+// CRUD. It holds the pool and owns definition-side transactions.
+type Catalog struct {
+	pool *pgxpool.Pool
+}
+
+// NewCatalog returns a Catalog backed by pool.
+func NewCatalog(pool *pgxpool.Pool) *Catalog {
+	return &Catalog{pool: pool}
+}
+
+// Create writes a complete definition — its statuses, steps, and actions, plus
+// the entry step — in a single transaction, so a reader never sees a
+// half-built definition. The caller's value is not mutated; the returned value
+// is the stored definition, read back canonically.
+//
+// Ids are optional and generated (UUIDv7) when omitted; ids supplied by the
+// caller are kept, which is how an action references a step declared elsewhere
+// in the same tree. InitialStepDefinitionID is optional too: when unset, the
+// first step in Steps becomes the entry step; when set, it must reference one of
+// the steps in Steps. A definition with no steps cannot be created.
+func (c *Catalog) Create(ctx context.Context, def WorkflowDefinition) (WorkflowDefinition, error) {
+	if len(def.Steps) == 0 {
+		return WorkflowDefinition{}, ErrNoSteps
+	}
+
+	def = def.clone()
+	if err := fillIDs(&def); err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	// Resolve the entry step after fillIDs, so the default uses Steps[0]'s final
+	// id whether the caller supplied it or the library generated it. An explicit
+	// id is checked against the tree here, before the transaction: otherwise a
+	// mismatch surfaces only as a deferred-FK violation at commit, mapped to the
+	// unhelpful CrossDefinitionError.
+	if def.InitialStepDefinitionID == nil {
+		def.InitialStepDefinitionID = &def.Steps[0].ID
+	} else if !stepExists(def.Steps, *def.InitialStepDefinitionID) {
+		return WorkflowDefinition{}, ErrInitialStepNotInTree
+	}
+
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := insertWorkflowDefinition(ctx, tx, def.ID, def.Name); err != nil {
+		return WorkflowDefinition{}, err
+	}
+	for _, s := range def.Statuses {
+		if err := insertStatus(ctx, tx, s); err != nil {
+			return WorkflowDefinition{}, err
+		}
+	}
+	for _, st := range def.Steps {
+		if err := insertStep(ctx, tx, st); err != nil {
+			return WorkflowDefinition{}, err
+		}
+		for _, a := range st.Actions {
+			if err := insertAction(ctx, tx, a); err != nil {
+				return WorkflowDefinition{}, err
+			}
+		}
+	}
+	if err := setInitialStep(ctx, tx, def.ID, *def.InitialStepDefinitionID); err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	// Read back within the same transaction, so the return value is canonical
+	// (ordered, non-nil slices) and reflects exactly what was written.
+	result, err := readDefinition(ctx, tx, def.ID)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	// The reference FKs are deferred, so a malformed reference in the input
+	// (e.g. an action pointing at a step that is not in this tree) surfaces here
+	// at commit, not at the offending insert. Map it like any other write error.
+	if err := tx.Commit(ctx); err != nil {
+		return WorkflowDefinition{}, mapWriteErr(err, "")
+	}
+	return result, nil
+}
+
+// Get returns the whole definition tree — statuses, steps, and each step's
+// actions. It reads inside a repeatable-read transaction so its four queries are
+// one consistent snapshot: a concurrent edit cannot tear the read.
+func (c *Catalog) Get(ctx context.Context, id uuid.UUID) (WorkflowDefinition, error) {
+	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	def, err := readDefinition(ctx, tx, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return WorkflowDefinition{}, err
+	}
+	return def, nil
+}
+
+// DeleteWorkflowDefinition removes a definition and, by cascade, all its
+// statuses, steps, and actions. Returns NotFoundError if no such definition.
+func (c *Catalog) DeleteWorkflowDefinition(ctx context.Context, id uuid.UUID) error {
+	return deleteWorkflowDefinition(ctx, c.pool, id)
+}
+
+// AddStatus adds a status to a definition.
+func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID, p AddStatusParams) (WorkflowStatusDefinition, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return WorkflowStatusDefinition{}, err
+	}
+	s := WorkflowStatusDefinition{ID: id, WorkflowDefinitionID: workflowDefinitionID, Name: p.Name}
+	if err := insertStatus(ctx, c.pool, s); err != nil {
+		return WorkflowStatusDefinition{}, err
+	}
+	return s, nil
+}
+
+// UpdateStatus replaces a status's mutable columns and returns the stored row.
+func (c *Catalog) UpdateStatus(ctx context.Context, statusID uuid.UUID, p UpdateStatusParams) (WorkflowStatusDefinition, error) {
+	if err := updateStatus(ctx, c.pool, statusID, p); err != nil {
+		return WorkflowStatusDefinition{}, err
+	}
+	return getStatusRow(ctx, c.pool, statusID)
+}
+
+// DeleteStatus removes a status. Returns ReferencedError if a step uses it or an
+// action ends in it, NotFoundError if no such status.
+func (c *Catalog) DeleteStatus(ctx context.Context, statusID uuid.UUID) error {
+	return deleteStatus(ctx, c.pool, statusID)
+}
+
+// AddStep adds a step to a definition. The returned step has an empty, non-nil
+// Actions slice: it is loaded and has no actions yet.
+func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p AddStepParams) (StepDefinition, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return StepDefinition{}, err
+	}
+	s := StepDefinition{
+		ID:                         id,
+		WorkflowDefinitionID:       workflowDefinitionID,
+		WorkflowStatusDefinitionID: p.StatusID,
+		AssigneeID:                 p.AssigneeID,
+		Name:                       p.Name,
+	}
+	if err := insertStep(ctx, c.pool, s); err != nil {
+		return StepDefinition{}, err
+	}
+	s.Actions = []ActionDefinition{}
+	return s, nil
+}
+
+// UpdateStep replaces a step's own mutable columns (name, status, assignee) and
+// returns the stored step with its actions re-fetched and populated. It does not
+// read or change the step's actions as an input: actions are managed through
+// AddAction/UpdateAction/DeleteAction.
+func (c *Catalog) UpdateStep(ctx context.Context, stepID uuid.UUID, p UpdateStepParams) (StepDefinition, error) {
+	if err := updateStep(ctx, c.pool, stepID, p); err != nil {
+		return StepDefinition{}, err
+	}
+	step, err := getStepRow(ctx, c.pool, stepID)
+	if err != nil {
+		return StepDefinition{}, err
+	}
+	actions, err := listActionsByStep(ctx, c.pool, stepID)
+	if err != nil {
+		return StepDefinition{}, err
+	}
+	step.Actions = actions
+	return step, nil
+}
+
+// DeleteStep removes a step and, by cascade, its actions. Returns ReferencedError
+// if another action routes to it or it is the entry step, NotFoundError if no
+// such step.
+func (c *Catalog) DeleteStep(ctx context.Context, stepID uuid.UUID) error {
+	return deleteStep(ctx, c.pool, stepID)
+}
+
+// AddAction adds an action to a step. Exactly one of NextStepID / TerminalStatusID
+// must be set. The step must exist (NotFoundError otherwise); its definition is
+// looked up so the action carries the same workflow_definition_id.
+func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p AddActionParams) (ActionDefinition, error) {
+	step, err := getStepRow(ctx, c.pool, stepDefinitionID)
+	if err != nil {
+		return ActionDefinition{}, err
+	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return ActionDefinition{}, err
+	}
+	a := ActionDefinition{
+		ID:                                 id,
+		WorkflowDefinitionID:               step.WorkflowDefinitionID,
+		StepDefinitionID:                   stepDefinitionID,
+		Name:                               p.Name,
+		NextStepDefinitionID:               p.NextStepID,
+		TerminalWorkflowStatusDefinitionID: p.TerminalStatusID,
+	}
+	if err := insertAction(ctx, c.pool, a); err != nil {
+		return ActionDefinition{}, err
+	}
+	return a, nil
+}
+
+// UpdateAction replaces an action's mutable columns and returns the stored row.
+// The exactly-one next-step / terminal-status rule is enforced.
+func (c *Catalog) UpdateAction(ctx context.Context, actionID uuid.UUID, p UpdateActionParams) (ActionDefinition, error) {
+	if err := updateAction(ctx, c.pool, actionID, p); err != nil {
+		return ActionDefinition{}, err
+	}
+	return getActionRow(ctx, c.pool, actionID)
+}
+
+// DeleteAction removes an action. Nothing references an action, so this only
+// fails with NotFoundError if no such action.
+func (c *Catalog) DeleteAction(ctx context.Context, actionID uuid.UUID) error {
+	return deleteAction(ctx, c.pool, actionID)
+}
+
+// readDefinition assembles the deep tree from four queries on q. Shared by Get
+// (in a repeatable-read snapshot) and Create (reading its own writes before
+// commit). Every returned slice is non-nil: an empty slice means "loaded, none".
+func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefinition, error) {
+	def, err := getWorkflowDefinitionRow(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+	statuses, err := listStatusesByDefinition(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+	steps, err := listStepsByDefinition(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+	actions, err := listActionsByDefinition(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	byStep := make(map[uuid.UUID][]ActionDefinition, len(steps))
+	for _, a := range actions {
+		byStep[a.StepDefinitionID] = append(byStep[a.StepDefinitionID], a)
+	}
+	for i := range steps {
+		acts := byStep[steps[i].ID]
+		if acts == nil {
+			acts = []ActionDefinition{}
+		}
+		steps[i].Actions = acts
+	}
+
+	def.Statuses = statuses
+	def.Steps = steps
+	return def, nil
+}
+
+// clone returns a deep-enough copy that filling ids and parent links never
+// mutates the caller's slices. Pointer fields are shared but never written
+// through.
+func (def WorkflowDefinition) clone() WorkflowDefinition {
+	out := def
+	out.Statuses = append([]WorkflowStatusDefinition(nil), def.Statuses...)
+	out.Steps = make([]StepDefinition, len(def.Steps))
+	for i, st := range def.Steps {
+		cp := st
+		cp.Actions = append([]ActionDefinition(nil), st.Actions...)
+		out.Steps[i] = cp
+	}
+	return out
+}
+
+// fillIDs generates any zero id and stamps parent links from the tree structure,
+// so the caller only supplies ids for entities it references.
+func fillIDs(def *WorkflowDefinition) error {
+	var err error
+	if def.ID, err = ensureID(def.ID); err != nil {
+		return err
+	}
+	for i := range def.Statuses {
+		if def.Statuses[i].ID, err = ensureID(def.Statuses[i].ID); err != nil {
+			return err
+		}
+		def.Statuses[i].WorkflowDefinitionID = def.ID
+	}
+	for i := range def.Steps {
+		if def.Steps[i].ID, err = ensureID(def.Steps[i].ID); err != nil {
+			return err
+		}
+		def.Steps[i].WorkflowDefinitionID = def.ID
+		for j := range def.Steps[i].Actions {
+			if def.Steps[i].Actions[j].ID, err = ensureID(def.Steps[i].Actions[j].ID); err != nil {
+				return err
+			}
+			def.Steps[i].Actions[j].WorkflowDefinitionID = def.ID
+			def.Steps[i].Actions[j].StepDefinitionID = def.Steps[i].ID
+		}
+	}
+	return nil
+}
+
+func ensureID(id uuid.UUID) (uuid.UUID, error) {
+	if id != uuid.Nil {
+		return id, nil
+	}
+	return uuid.NewV7()
+}
+
+func stepExists(steps []StepDefinition, id uuid.UUID) bool {
+	for i := range steps {
+		if steps[i].ID == id {
+			return true
+		}
+	}
+	return false
+}

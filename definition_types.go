@@ -1,7 +1,7 @@
 // Package flowcore is a subject-agnostic workflow library. Its configuration
 // side — the definition entities modeled here — is a template from which the
 // Engine later starts running workflow instances. Definitions are edited
-// through the Definitions type.
+// through the Catalog type.
 package flowcore
 
 import "github.com/google/uuid"

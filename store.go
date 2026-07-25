@@ -20,4 +20,4 @@ type querier interface {
 // The store is the boundary that translates database errors into the domain
 // taxonomy: each helper maps its own error by intent (mapWriteErr on inserts and
 // updates, mapDeleteErr on deletes) and reports a missing row as NotFoundError.
-// Above the store, Definitions composes these helpers and owns transactions.
+// Above the store, Catalog composes these helpers and owns transactions.

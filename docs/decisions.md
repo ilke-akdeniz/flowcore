@@ -174,6 +174,10 @@ Nullable is deliberate: a `NOT NULL` column would make the definition row un-ins
 "Definition must have an entry step" is enforced by the aggregate create, not the schema; the Engine must fail clearly at start if it's null.
 Aggregate insert order: definition (entry null) → statuses → steps → actions → UPDATE the entry-step id.
 This added a field to the State section.
+Create's input contract, settled when the Definitions layer was built, defaults the entry step rather than always requiring it: when `InitialStepDefinitionID` is unset, the first step in the input becomes the entry step, resolved after id-generation so it works whether the caller supplied ids or left them to be generated.
+The default keys on whether an entry step was designated, never on whether ids were present.
+This is an input-side ergonomic default only — the schema-side `initial_step_definition_id` FK and the positional-vs-FK reasoning above are unchanged.
+Two pre-flight rejections remain: a definition with no steps (`ErrNoSteps`), and an explicitly-set entry pointer that matches no step in the tree (`ErrInitialStepNotInTree`), the latter checked before the transaction so it is legible rather than surfacing as a deferred-FK `CrossDefinitionError` at commit.
 
 ---
 
@@ -317,6 +321,7 @@ Applying the no-speculative-structure rule to `UpdateStep` was a category error;
 **Consequence.**
 This prompted a clarifying edit to the no-speculative-structure rule in `CLAUDE.md` and the project instructions, distinguishing schema/abstraction speculation (defer) from finishing operations on existing entities (build), with a guard that "we'll need it eventually" is not a licence to build now.
 `assignee_id` reassignment stays deferred — it's an instance-side mutation belonging to the Engine, with no definition-side table to act on.
+The service type was later renamed `Definitions` → `Catalog` (during the Definitions-slice implementation), to pair with `Engine` as a system of nouns — the catalog holds templates, the engine runs them — and to keep the service file name from chattering against the definition types file. The entity types and the "definition" domain term are unchanged.
 
 ---
 
@@ -434,3 +439,25 @@ Deferral does not weaken the referenced-delete or cross-definition blocks: on a 
 **Consequence.**
 Inside Create (a multi-statement transaction), a malformed-id violation now surfaces at Commit rather than at the offending insert, because deferred checks run at commit time.
 Create's Commit error must therefore route through mapWriteErr, and a Create-with-cross-definition-reference test must assert the error still maps to CrossDefinitionError.
+
+---
+
+## 16. Pre-flight sentinels alongside the DB-mapped taxonomy
+
+**Context.**
+Decision 13 built the error taxonomy as typed errors wrapping sentinels, every one a mapping of a DB rejection.
+Create's entry-step validation (decision 6's consequence) introduced errors that are checked *before* the database is touched — `ErrNoSteps` and `ErrInitialStepNotInTree` — which don't fit that shape.
+
+**Decision.**
+The error surface has two classes.
+The six DB-mapped errors are typed and field-carrying, satisfying both `errors.Is` (category) and `errors.As` (detail).
+The pre-flight input-check errors are plain field-less sentinels, `errors.Is`-matchable only, produced by Create before any transaction.
+
+**Why.**
+A pre-flight error has no DB rejection to map and no per-occurrence detail worth carrying — there is one way to have no steps, and the caller already holds the input that violated the rule.
+A typed wrapper with no meaningful fields would be ceremony.
+The consequence for testing: pre-flight sentinels are covered where Create produces them (the integration suite), not in the typed-error unit test, whose purpose is asserting each typed error wraps its own sentinel and no other — a pre-flight sentinel has no typed wrapper, so including it there would assert nothing.
+
+**Consequence.**
+The taxonomy is no longer "every error is a mapped DB rejection."
+A reader — and the Engine slice, which will add its own errors — must distinguish the two origins: mapped-from-pgconn versus pre-flight input check.
