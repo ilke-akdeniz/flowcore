@@ -107,6 +107,7 @@ The instance-side entities (`Workflow`, `Step`, `Workflow Status`) are snapshots
 - id
 - name
 - initial step definition id  // the entry step the workflow begins on; set by the aggregate create, references a step in this same definition
+- status definitions
 - step definitions
 
 *Workflow Status Definition*
@@ -238,6 +239,8 @@ _The rules that must never be violated._
 Never provides a definition that is still under construction, never a previous stale definition.
 - Same-definition integrity: a step's status, and an action's next step, always reference rows belonging to the same definition.
   Enforced in schema by composite foreign keys, not by application checks.
+- The reference foreign keys are `DEFERRABLE INITIALLY DEFERRED`, so a whole-definition delete — whose cascade transiently leaves an action pointing at an already-deleted status — is checked at commit, when the state is consistent again.
+  Single-statement operations still surface violations immediately, so referenced-delete and cross-definition blocks are unaffected.
 
 *Engine*
  - Starts only one active workflow for a {subject, workflowDefinition}

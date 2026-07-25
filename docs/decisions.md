@@ -406,3 +406,31 @@ A dedicated test DB keeps truncation from wiping the dev database; `t.Skip` keep
 Serial execution is a _designed_ correctness condition, not incidental: a shared-pool truncate strategy corrupts under concurrency, so all DB-touching tests live in one package and none calls `t.Parallel()`.
 If the suite ever spreads across packages, `go test ./...`'s cross-package concurrency needs `-p 1` or a shared lock.
 The existing pgx smoke test (which `t.Fatal`s) is deleted once real tests land, per its own TODO.
+
+--- 
+
+## 15. Deferrable reference FKs, so whole-definition delete works
+
+**Context.**
+Surfaced during implementation of the config-side migrations, not during grilling.
+Deleting a whole definition failed: a status is a direct cascade-child of the definition, but an action referencing that status via its terminal-status FK is reached through a different cascade branch (definition → step → action).
+Mid-cascade, Postgres deleted the status while the terminal action still pointed at it, and the reference FK's NO ACTION check fired and blocked the delete.
+The decision-5 probe missed this because the status table and the terminal-status FK (decision 7) did not exist yet when that probe ran.
+
+**Options.**
+Immediate reference FKs (the decision-5 default) — rejected, they make whole-definition delete impossible.
+Reference FKs DEFERRABLE INITIALLY DEFERRED, checked at transaction end rather than per-statement.
+
+**Decision.**
+The four reference FKs (`fk_step_definition_status`, `fk_action_definition_next_step`, `fk_action_definition_terminal_status`, `fk_workflow_definition_initial_step`) are DEFERRABLE INITIALLY DEFERRED.
+The three cascade drivers stay immediate.
+
+**Why.**
+By the end of a whole-definition delete transaction, both the referenced status and the referencing action are gone, so a deferred check sees a self-consistent state and passes; an immediate check fails mid-cascade on the transient inconsistency.
+This is exactly the escape hatch decision 5 kept open: NO ACTION was chosen over RESTRICT precisely because NO ACTION can later be marked deferrable, and RESTRICT cannot.
+So this completes decision 5 rather than reversing it.
+Deferral does not weaken the referenced-delete or cross-definition blocks: on a single-statement autocommit operation the statement is the transaction, so the check still surfaces from that statement — verified in psql, where deleting a whole definition succeeds and deleting an in-use status still blocks.
+
+**Consequence.**
+Inside Create (a multi-statement transaction), a malformed-id violation now surfaces at Commit rather than at the offending insert, because deferred checks run at commit time.
+Create's Commit error must therefore route through mapWriteErr, and a Create-with-cross-definition-reference test must assert the error still maps to CrossDefinitionError.
