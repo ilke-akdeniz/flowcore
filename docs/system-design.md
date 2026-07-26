@@ -165,7 +165,7 @@ Does any component emerge naturally?_
 *Catalog*
 - Provides ergonomic workflow definition generation for clients via an aggregate.
 - Collects the workflow definition needed for a workflow start.
-- Realized concretely by the exported `Definitions` type (constructed with `NewDefinitions(pool)`), holding the pool and owning definition-side transactions.
+- Realized concretely by the exported `Catalog` type (constructed with `NewCatalog(pool)`), holding the pool and owning definition-side transactions.
 - Create is the only aggregate write — the whole definition tree in one transaction.
   Everything else is granular per-entity CRUD.
 - Create accepts a whole definition tree and defaults the entry step to the first step when the caller leaves it unset; an explicitly-set entry step must reference a step in the tree, checked before the transaction. 
@@ -369,6 +369,7 @@ Errors surface as a small typed taxonomy over the DB's rejections, mapped centra
 Every typed error wraps a sentinel so both `errors.Is` and `errors.As` work.
 This requires every constraint the mapper switches on — unique indexes, composite FKs, CHECKs — to be explicitly named in the migrations.
 Alongside these DB-mapped errors, Create performs pre-flight input checks that produce plain field-less sentinels (`ErrNoSteps`, `ErrInitialStepNotInTree`) before any transaction; these are `errors.Is`-matchable but have no typed form, since they map no DB rejection and carry no per-occurrence detail.
+A third case, `UnmappedConstraintError`, is the mapper's fallback for a constraint name it does not recognize — it fails loudly rather than guessing a domain error, and carries the original `pgconn` error for diagnosis; it has no live trigger through the current schema and exists as a safeguard against a future migration adding a constraint the mapper isn't taught about.
 
 Migrations: goose (github.com/pressly/goose/v3).
 Chosen because FlowCore ships migrations for clients to run into their own Postgres, and goose serves both consumption paths from the same files — a CLI for local development, and an embedded programmatic entrypoint (embed.FS) so a client can apply migrations from application code without installing a tool.

@@ -121,8 +121,13 @@ func (c *Catalog) DeleteWorkflowDefinition(ctx context.Context, id uuid.UUID) er
 	return deleteWorkflowDefinition(ctx, c.pool, id)
 }
 
-// AddStatus adds a status to a definition.
+// AddStatus adds a status to a definition. The definition must exist
+// (NotFoundError otherwise): checked before the insert so a missing parent reads
+// as not-found, not the cascade-driver FK's generic violation.
 func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID, p AddStatusParams) (WorkflowStatusDefinition, error) {
+	if _, err := getWorkflowDefinitionRow(ctx, c.pool, workflowDefinitionID); err != nil {
+		return WorkflowStatusDefinition{}, err
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return WorkflowStatusDefinition{}, err
@@ -148,9 +153,13 @@ func (c *Catalog) DeleteStatus(ctx context.Context, statusID uuid.UUID) error {
 	return deleteStatus(ctx, c.pool, statusID)
 }
 
-// AddStep adds a step to a definition. The returned step has an empty, non-nil
+// AddStep adds a step to a definition. The definition must exist (NotFoundError
+// otherwise), checked as in AddStatus. The returned step has an empty, non-nil
 // Actions slice: it is loaded and has no actions yet.
 func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p AddStepParams) (StepDefinition, error) {
+	if _, err := getWorkflowDefinitionRow(ctx, c.pool, workflowDefinitionID); err != nil {
+		return StepDefinition{}, err
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return StepDefinition{}, err

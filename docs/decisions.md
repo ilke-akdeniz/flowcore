@@ -461,3 +461,34 @@ The consequence for testing: pre-flight sentinels are covered where Create produ
 **Consequence.**
 The taxonomy is no longer "every error is a mapped DB rejection."
 A reader — and the Engine slice, which will add its own errors — must distinguish the two origins: mapped-from-pgconn versus pre-flight input check.
+
+---
+
+## 17. Constraint mapping fails loud on an unrecognized name, never guesses
+
+**Context.**
+Surfaced during review of the Catalog CRUD methods: `AddStatus` and `AddStep` inserted without checking their parent definition existed first, unlike `AddAction` (which looks up its step first).
+A missing-parent insert hit the cascade-driver FK (`fk_workflow_status_definition_workflow` / `fk_step_definition_workflow`), a 23503 the mapper had no explicit case for.
+Investigating exposed the real defect: `mapWriteErr` and `mapDeleteErr` each had a generic fallback that guessed a domain error for any unrecognized 23503 — `CrossDefinitionError` on the write path, `ReferencedError` on the delete path — rather than failing on it.
+The missing-parent case produced a plausible-but-wrong `CrossDefinitionError` for a definition that simply didn't exist.
+
+**Options.**
+Keep the guess-based fallback, so every 23503 always maps to some domain error and no raw `pgconn` ever reaches a caller.
+Fail loud on any constraint name the mapper doesn't explicitly recognize.
+
+**Decision.**
+Two changes, made together.
+`AddStatus` and `AddStep` now check their parent definition exists first (matching `AddAction`'s pattern) and return `NotFoundError` before attempting the insert.
+Independently, both mappers' fallback is replaced: an unrecognized 23503 (and an unrecognized 23505/23514) now returns `UnmappedConstraintError{Constraint, Code}`, a new type wrapping both `ErrUnmappedConstraint` (via `Unwrap() []error`, so `errors.Is` matches the sentinel) and the original `*pgconn.PgError` (recoverable via `errors.As`, for diagnosis).
+
+**Why.**
+Decision 13 built the taxonomy on explicit, named-constraint mapping specifically so an unrecognized constraint would be caught by the constraint-mapping test rather than silently mismapped.
+A guess-based fallback defeated that: it produced a wrong-but-plausible error instead of a loud, diagnosable one, and nothing distinguished "true cross-definition violation" from "some other FK I didn't recognize."
+The existence-check fix addresses the specific bug; the fallback fix addresses the pattern that let a wrong guess through undetected, and that any future unmapped constraint would hit the same way.
+`UnmappedConstraintError` has no live trigger through the current public API and schema — every reachable 23503/23505/23514 is either explicitly mapped or pre-empted by an existence check — so it is a defensive default for a future migration that adds a constraint without wiring it into the mapper, not dead code in the speculative sense.
+Its only test is synthetic (constructed `pgconn.PgError` values), which is the correct tool for an error with no way to occur through the live schema today.
+
+**Consequence.**
+The not-found matrix grew to cover `AddStatus`/`AddStep` with a missing definition id.
+The constraint-mapping test gained an assertion that an unrecognized constraint name maps to `UnmappedConstraintError` and none of the six domain errors.
+`UnmappedConstraintError` is a third error family, alongside the six DB-mapped errors (decision 13) and the two pre-flight sentinels (decision 16) — a reader of the taxonomy now needs to know all three origins.

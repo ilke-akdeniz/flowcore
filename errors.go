@@ -31,6 +31,11 @@ var (
 	ErrInvalidAction = errors.New("flowcore: invalid action")
 	// ErrInvalidName is returned when a name is empty or too long.
 	ErrInvalidName = errors.New("flowcore: invalid name")
+	// ErrUnmappedConstraint is returned when a database constraint violation's
+	// constraint name is not in the mapper's explicit table — a deliberate
+	// fail-loud for an unanticipated constraint, kept distinct from the domain
+	// errors above so it is never silently guessed as one of them.
+	ErrUnmappedConstraint = errors.New("flowcore: unmapped database constraint")
 
 	// ErrNoSteps and ErrInitialStepNotInTree are pre-flight input checks in
 	// Create, not mappings of a database rejection — so, like the others, they
@@ -117,3 +122,20 @@ func (e *InvalidNameError) Error() string {
 	return "flowcore: name must be between 1 and 200 characters"
 }
 func (e *InvalidNameError) Unwrap() error { return ErrInvalidName }
+
+// UnmappedConstraintError reports a constraint violation whose constraint name
+// the mapper does not recognize — the "fail loudly on the unexpected" signal,
+// deliberately distinct from the domain errors so an unanticipated constraint
+// surfaces (in CI, or to a caller) rather than being guessed at. Unwrap returns
+// both ErrUnmappedConstraint (for errors.Is) and the underlying pgconn error
+// (so errors.As can still recover the raw detail for diagnosis).
+type UnmappedConstraintError struct {
+	Constraint string
+	Code       string
+	cause      error
+}
+
+func (e *UnmappedConstraintError) Error() string {
+	return fmt.Sprintf("flowcore: unmapped database constraint %q (SQLSTATE %s): %v", e.Constraint, e.Code, e.cause)
+}
+func (e *UnmappedConstraintError) Unwrap() []error { return []error{ErrUnmappedConstraint, e.cause} }
