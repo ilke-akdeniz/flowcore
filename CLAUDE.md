@@ -54,6 +54,20 @@ One guard against over-correcting: "we know we'll need X eventually" is not a li
 A capability earns its place this slice only if it's the correctness condition of something being built now, not because it's on the roadmap.
 (The completion-path locking mechanism stays deferred on precisely this ground, even though concurrency is central to the library.)
 
+## Identifier naming
+
+Full, complete-word identifiers for domain-concept variables, struct fields, and parameters — no truncation, regardless of scope (`catalog`, not `c`; `definition`, not `def`; `action`, not `act`).
+This is a deliberate deviation from Go's usual short-local-name convention: abbreviations that must be decoded rather than read cost more for a solo maintainer returning to code after a context switch than the convention assumes.
+
+Three narrow exceptions, all reasoned from the same test — does this identifier require project-specific memory to decode, or is its meaning self-evident at every site it's used:
+
+- Go's structural particles, fixed in meaning across all Go code, not just this codebase: `err`, `ok`, `ctx`, loop indices (`i`, `j`), generic type parameters (`T`).
+- Method receivers keep Go's ordinary 1-2 letter convention, and so does a function's single dominant parameter — the one value a short, single-purpose function operates on throughout, with no other parameter of comparable weight (e.g. `fillIDs(d *WorkflowDefinition)`). This does not extend to struct fields, occasional-use locals, loop variables, or any function with more than one parameter of comparable importance.
+- An identifier is not expanded if doing so would make it textually identical to its own type name (e.g. a `querier`-typed parameter stays `q`, not `querier querier`), since that shadows the type and makes it unreferenceable by name in that scope.
+
+When in doubt, use the full word — these exceptions are meant to be rare, not a broad loophole.
+Reasoning and worked examples: `docs/decisions.md`, decision 18.
+
 ## Iteration 1 scope
 
 In scope: configure workflow, start workflow, get current step, complete step.
