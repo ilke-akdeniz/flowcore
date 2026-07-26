@@ -17,11 +17,11 @@ const (
 	ixStepName   = "ux_step_definition_name"
 	ixActionName = "ux_action_definition_name"
 
-	ckActionTerminalXOR   = "ck_action_definition_terminal_xor"
-	ckWFDefinitionNameLen = "ck_workflow_definition_name_len"
-	ckStatusNameLen       = "ck_workflow_status_definition_name_len"
-	ckStepNameLen         = "ck_step_definition_name_len"
-	ckActionNameLen       = "ck_action_definition_name_len"
+	ckActionTerminalXOR         = "ck_action_definition_terminal_xor"
+	ckWorkflowDefinitionNameLen = "ck_workflow_definition_name_len"
+	ckStatusNameLen             = "ck_workflow_status_definition_name_len"
+	ckStepNameLen               = "ck_step_definition_name_len"
+	ckActionNameLen             = "ck_action_definition_name_len"
 
 	// The same-definition reference FKs. On a write a violation means a reference
 	// pointed outside its definition (CrossDefinitionError); on a delete it means
@@ -31,10 +31,10 @@ const (
 	// parent definition are deliberately absent: their write side is intercepted
 	// by the existence checks in AddStatus/AddStep/AddAction, and their delete
 	// side cascades, so if one ever surfaced here it should fail loudly.
-	fkStepStatus       = "fk_step_definition_status"
-	fkActionNextStep   = "fk_action_definition_next_step"
-	fkActionTermStatus = "fk_action_definition_terminal_status"
-	fkInitialStep      = "fk_workflow_definition_initial_step"
+	fkStepStatus           = "fk_step_definition_status"
+	fkActionNextStep       = "fk_action_definition_next_step"
+	fkActionTerminalStatus = "fk_action_definition_terminal_status"
+	fkInitialStep          = "fk_workflow_definition_initial_step"
 )
 
 // SQLSTATE codes we map. Kept as local constants to avoid a dependency on a
@@ -63,7 +63,7 @@ func mapWriteErr(err error, name string) error {
 	}
 	if pg.Code == sqlstateForeignKeyViolation {
 		switch pg.ConstraintName {
-		case fkStepStatus, fkActionNextStep, fkActionTermStatus, fkInitialStep:
+		case fkStepStatus, fkActionNextStep, fkActionTerminalStatus, fkInitialStep:
 			return &CrossDefinitionError{}
 		}
 		return unmapped(pg)
@@ -89,7 +89,7 @@ func mapDeleteErr(err error, entity string, id uuid.UUID) error {
 	}
 	if pg.Code == sqlstateForeignKeyViolation {
 		switch pg.ConstraintName {
-		case fkStepStatus, fkActionNextStep, fkActionTermStatus, fkInitialStep:
+		case fkStepStatus, fkActionNextStep, fkActionTerminalStatus, fkInitialStep:
 			return &ReferencedError{Entity: entity, ID: id}
 		}
 		return unmapped(pg)
@@ -120,7 +120,7 @@ func mapConstraintCommon(pg *pgconn.PgError, name string) (error, bool) {
 		switch pg.ConstraintName {
 		case ckActionTerminalXOR:
 			return &InvalidActionError{}, true
-		case ckWFDefinitionNameLen, ckStatusNameLen, ckStepNameLen, ckActionNameLen:
+		case ckWorkflowDefinitionNameLen, ckStatusNameLen, ckStepNameLen, ckActionNameLen:
 			return &InvalidNameError{}, true
 		}
 		return unmapped(pg), true

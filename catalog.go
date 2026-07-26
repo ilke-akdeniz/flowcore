@@ -30,13 +30,13 @@ func NewCatalog(pool *pgxpool.Pool) *Catalog {
 // in the same tree. InitialStepDefinitionID is optional too: when unset, the
 // first step in Steps becomes the entry step; when set, it must reference one of
 // the steps in Steps. A definition with no steps cannot be created.
-func (c *Catalog) Create(ctx context.Context, def WorkflowDefinition) (WorkflowDefinition, error) {
-	if len(def.Steps) == 0 {
+func (c *Catalog) Create(ctx context.Context, definition WorkflowDefinition) (WorkflowDefinition, error) {
+	if len(definition.Steps) == 0 {
 		return WorkflowDefinition{}, ErrNoSteps
 	}
 
-	def = def.clone()
-	if err := fillIDs(&def); err != nil {
+	definition = definition.clone()
+	if err := fillIDs(&definition); err != nil {
 		return WorkflowDefinition{}, err
 	}
 
@@ -45,9 +45,9 @@ func (c *Catalog) Create(ctx context.Context, def WorkflowDefinition) (WorkflowD
 	// id is checked against the tree here, before the transaction: otherwise a
 	// mismatch surfaces only as a deferred-FK violation at commit, mapped to the
 	// unhelpful CrossDefinitionError.
-	if def.InitialStepDefinitionID == nil {
-		def.InitialStepDefinitionID = &def.Steps[0].ID
-	} else if !stepExists(def.Steps, *def.InitialStepDefinitionID) {
+	if definition.InitialStepDefinitionID == nil {
+		definition.InitialStepDefinitionID = &definition.Steps[0].ID
+	} else if !stepExists(definition.Steps, *definition.InitialStepDefinitionID) {
 		return WorkflowDefinition{}, ErrInitialStepNotInTree
 	}
 
@@ -57,31 +57,31 @@ func (c *Catalog) Create(ctx context.Context, def WorkflowDefinition) (WorkflowD
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := insertWorkflowDefinition(ctx, tx, def.ID, def.Name); err != nil {
+	if err := insertWorkflowDefinition(ctx, tx, definition.ID, definition.Name); err != nil {
 		return WorkflowDefinition{}, err
 	}
-	for _, s := range def.Statuses {
-		if err := insertStatus(ctx, tx, s); err != nil {
+	for _, status := range definition.Statuses {
+		if err := insertStatus(ctx, tx, status); err != nil {
 			return WorkflowDefinition{}, err
 		}
 	}
-	for _, st := range def.Steps {
-		if err := insertStep(ctx, tx, st); err != nil {
+	for _, step := range definition.Steps {
+		if err := insertStep(ctx, tx, step); err != nil {
 			return WorkflowDefinition{}, err
 		}
-		for _, a := range st.Actions {
-			if err := insertAction(ctx, tx, a); err != nil {
+		for _, action := range step.Actions {
+			if err := insertAction(ctx, tx, action); err != nil {
 				return WorkflowDefinition{}, err
 			}
 		}
 	}
-	if err := setInitialStep(ctx, tx, def.ID, *def.InitialStepDefinitionID); err != nil {
+	if err := setInitialStep(ctx, tx, definition.ID, *definition.InitialStepDefinitionID); err != nil {
 		return WorkflowDefinition{}, err
 	}
 
 	// Read back within the same transaction, so the return value is canonical
 	// (ordered, non-nil slices) and reflects exactly what was written.
-	result, err := readDefinition(ctx, tx, def.ID)
+	result, err := readDefinition(ctx, tx, definition.ID)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
@@ -105,14 +105,14 @@ func (c *Catalog) Get(ctx context.Context, id uuid.UUID) (WorkflowDefinition, er
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	def, err := readDefinition(ctx, tx, id)
+	definition, err := readDefinition(ctx, tx, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return WorkflowDefinition{}, err
 	}
-	return def, nil
+	return definition, nil
 }
 
 // DeleteWorkflowDefinition removes a definition and, by cascade, all its
@@ -132,11 +132,11 @@ func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID,
 	if err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
-	s := WorkflowStatusDefinition{ID: id, WorkflowDefinitionID: workflowDefinitionID, Name: p.Name}
-	if err := insertStatus(ctx, c.pool, s); err != nil {
+	status := WorkflowStatusDefinition{ID: id, WorkflowDefinitionID: workflowDefinitionID, Name: p.Name}
+	if err := insertStatus(ctx, c.pool, status); err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
-	return s, nil
+	return status, nil
 }
 
 // UpdateStatus replaces a status's mutable columns and returns the stored row.
@@ -164,18 +164,18 @@ func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p
 	if err != nil {
 		return StepDefinition{}, err
 	}
-	s := StepDefinition{
+	step := StepDefinition{
 		ID:                         id,
 		WorkflowDefinitionID:       workflowDefinitionID,
 		WorkflowStatusDefinitionID: p.StatusID,
 		AssigneeID:                 p.AssigneeID,
 		Name:                       p.Name,
 	}
-	if err := insertStep(ctx, c.pool, s); err != nil {
+	if err := insertStep(ctx, c.pool, step); err != nil {
 		return StepDefinition{}, err
 	}
-	s.Actions = []ActionDefinition{}
-	return s, nil
+	step.Actions = []ActionDefinition{}
+	return step, nil
 }
 
 // UpdateStep replaces a step's own mutable columns (name, status, assignee) and
@@ -217,7 +217,7 @@ func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p A
 	if err != nil {
 		return ActionDefinition{}, err
 	}
-	a := ActionDefinition{
+	action := ActionDefinition{
 		ID:                                 id,
 		WorkflowDefinitionID:               step.WorkflowDefinitionID,
 		StepDefinitionID:                   stepDefinitionID,
@@ -225,10 +225,10 @@ func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p A
 		NextStepDefinitionID:               p.NextStepID,
 		TerminalWorkflowStatusDefinitionID: p.TerminalStatusID,
 	}
-	if err := insertAction(ctx, c.pool, a); err != nil {
+	if err := insertAction(ctx, c.pool, action); err != nil {
 		return ActionDefinition{}, err
 	}
-	return a, nil
+	return action, nil
 }
 
 // UpdateAction replaces an action's mutable columns and returns the stored row.
@@ -250,7 +250,7 @@ func (c *Catalog) DeleteAction(ctx context.Context, actionID uuid.UUID) error {
 // (in a repeatable-read snapshot) and Create (reading its own writes before
 // commit). Every returned slice is non-nil: an empty slice means "loaded, none".
 func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefinition, error) {
-	def, err := getWorkflowDefinitionRow(ctx, q, id)
+	definition, err := getWorkflowDefinitionRow(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
@@ -268,20 +268,20 @@ func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefin
 	}
 
 	byStep := make(map[uuid.UUID][]ActionDefinition, len(steps))
-	for _, a := range actions {
-		byStep[a.StepDefinitionID] = append(byStep[a.StepDefinitionID], a)
+	for _, action := range actions {
+		byStep[action.StepDefinitionID] = append(byStep[action.StepDefinitionID], action)
 	}
 	for i := range steps {
-		acts := byStep[steps[i].ID]
-		if acts == nil {
-			acts = []ActionDefinition{}
+		stepActions := byStep[steps[i].ID]
+		if stepActions == nil {
+			stepActions = []ActionDefinition{}
 		}
-		steps[i].Actions = acts
+		steps[i].Actions = stepActions
 	}
 
-	def.Statuses = statuses
-	def.Steps = steps
-	return def, nil
+	definition.Statuses = statuses
+	definition.Steps = steps
+	return definition, nil
 }
 
 // clone returns a deep-enough copy that filling ids and parent links never
@@ -291,9 +291,9 @@ func (def WorkflowDefinition) clone() WorkflowDefinition {
 	out := def
 	out.Statuses = append([]WorkflowStatusDefinition(nil), def.Statuses...)
 	out.Steps = make([]StepDefinition, len(def.Steps))
-	for i, st := range def.Steps {
-		cp := st
-		cp.Actions = append([]ActionDefinition(nil), st.Actions...)
+	for i, step := range def.Steps {
+		cp := step
+		cp.Actions = append([]ActionDefinition(nil), step.Actions...)
 		out.Steps[i] = cp
 	}
 	return out
@@ -301,28 +301,28 @@ func (def WorkflowDefinition) clone() WorkflowDefinition {
 
 // fillIDs generates any zero id and stamps parent links from the tree structure,
 // so the caller only supplies ids for entities it references.
-func fillIDs(def *WorkflowDefinition) error {
+func fillIDs(d *WorkflowDefinition) error {
 	var err error
-	if def.ID, err = ensureID(def.ID); err != nil {
+	if d.ID, err = ensureID(d.ID); err != nil {
 		return err
 	}
-	for i := range def.Statuses {
-		if def.Statuses[i].ID, err = ensureID(def.Statuses[i].ID); err != nil {
+	for i := range d.Statuses {
+		if d.Statuses[i].ID, err = ensureID(d.Statuses[i].ID); err != nil {
 			return err
 		}
-		def.Statuses[i].WorkflowDefinitionID = def.ID
+		d.Statuses[i].WorkflowDefinitionID = d.ID
 	}
-	for i := range def.Steps {
-		if def.Steps[i].ID, err = ensureID(def.Steps[i].ID); err != nil {
+	for i := range d.Steps {
+		if d.Steps[i].ID, err = ensureID(d.Steps[i].ID); err != nil {
 			return err
 		}
-		def.Steps[i].WorkflowDefinitionID = def.ID
-		for j := range def.Steps[i].Actions {
-			if def.Steps[i].Actions[j].ID, err = ensureID(def.Steps[i].Actions[j].ID); err != nil {
+		d.Steps[i].WorkflowDefinitionID = d.ID
+		for j := range d.Steps[i].Actions {
+			if d.Steps[i].Actions[j].ID, err = ensureID(d.Steps[i].Actions[j].ID); err != nil {
 				return err
 			}
-			def.Steps[i].Actions[j].WorkflowDefinitionID = def.ID
-			def.Steps[i].Actions[j].StepDefinitionID = def.Steps[i].ID
+			d.Steps[i].Actions[j].WorkflowDefinitionID = d.ID
+			d.Steps[i].Actions[j].StepDefinitionID = d.Steps[i].ID
 		}
 	}
 	return nil

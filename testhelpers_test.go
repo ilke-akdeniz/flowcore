@@ -98,45 +98,45 @@ func assertEmpty(t *testing.T) {
 	}
 }
 
-// defIDs holds the explicit ids of a built definition so tests can reference and
-// delete specific rows.
-type defIDs struct {
-	def, status, mgr, dir uuid.UUID
+// definitionIDs holds the explicit ids of a built definition so tests can
+// reference and delete specific rows.
+type definitionIDs struct {
+	definition, status, managerStepID, directorStepID uuid.UUID
 }
 
-// twoStepDef builds a valid definition — one status, two steps
+// twoStepDefinition builds a valid definition — one status, two steps
 // (manager review -> director review) with routing and terminal actions, entry
 // at manager review. Ids are explicit so tests can target them.
-func twoStepDef(name string) (WorkflowDefinition, defIDs) {
-	ids := defIDs{
-		def:    uuid.Must(uuid.NewV7()),
-		status: uuid.Must(uuid.NewV7()),
-		mgr:    uuid.Must(uuid.NewV7()),
-		dir:    uuid.Must(uuid.NewV7()),
+func twoStepDefinition(name string) (WorkflowDefinition, definitionIDs) {
+	ids := definitionIDs{
+		definition:     uuid.Must(uuid.NewV7()),
+		status:         uuid.Must(uuid.NewV7()),
+		managerStepID:  uuid.Must(uuid.NewV7()),
+		directorStepID: uuid.Must(uuid.NewV7()),
 	}
-	def := WorkflowDefinition{
-		ID:                      ids.def,
+	definition := WorkflowDefinition{
+		ID:                      ids.definition,
 		Name:                    name,
-		InitialStepDefinitionID: &ids.mgr,
+		InitialStepDefinitionID: &ids.managerStepID,
 		Statuses:                []WorkflowStatusDefinition{{ID: ids.status, Name: "in progress"}},
 		Steps: []StepDefinition{
-			{ID: ids.mgr, WorkflowStatusDefinitionID: ids.status, Name: "manager review", Actions: []ActionDefinition{
-				{Name: "approve", NextStepDefinitionID: &ids.dir},
+			{ID: ids.managerStepID, WorkflowStatusDefinitionID: ids.status, Name: "manager review", Actions: []ActionDefinition{
+				{Name: "approve", NextStepDefinitionID: &ids.directorStepID},
 				{Name: "reject", TerminalWorkflowStatusDefinitionID: &ids.status},
 			}},
-			{ID: ids.dir, WorkflowStatusDefinitionID: ids.status, Name: "director review", Actions: []ActionDefinition{
+			{ID: ids.directorStepID, WorkflowStatusDefinitionID: ids.status, Name: "director review", Actions: []ActionDefinition{
 				{Name: "approve", TerminalWorkflowStatusDefinitionID: &ids.status},
 			}},
 		},
 	}
-	return def, ids
+	return definition, ids
 }
 
-func mustCreate(t *testing.T, c *Catalog, def WorkflowDefinition) WorkflowDefinition {
+func mustCreate(t *testing.T, catalog *Catalog, definition WorkflowDefinition) WorkflowDefinition {
 	t.Helper()
-	created, err := c.Create(context.Background(), def)
+	created, err := catalog.Create(context.Background(), definition)
 	if err != nil {
-		t.Fatalf("Create(%q): %v", def.Name, err)
+		t.Fatalf("Create(%q): %v", definition.Name, err)
 	}
 	return created
 }

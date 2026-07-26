@@ -26,6 +26,8 @@ Design decisions are worked out and recorded before code is written.
 Each is stress-tested through its alternatives, settled with a human in the loop, and landed in the design doc first; implementation follows the doc.
 `docs/decisions.md` is the trail.
 
+One deliberate idiom deviation: identifiers spell out full domain words rather than Go's typical short local names, with a narrow receiver-like exception for a function's single dominant parameter. Reasons recorded in decision 18.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

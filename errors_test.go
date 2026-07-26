@@ -31,16 +31,16 @@ func TestUnmappedConstraintFailsLoud(t *testing.T) {
 		if !errors.Is(got, ErrUnmappedConstraint) {
 			t.Errorf("%s: want ErrUnmappedConstraint, got %v", path, got)
 		}
-		var u *UnmappedConstraintError
-		if !errors.As(got, &u) {
+		var unmappedErr *UnmappedConstraintError
+		if !errors.As(got, &unmappedErr) {
 			t.Fatalf("%s: want *UnmappedConstraintError, got %v", path, got)
 		}
-		if u.Constraint != "fk_something_unmapped" || u.Code != sqlstateForeignKeyViolation {
-			t.Errorf("%s: carried {%q,%q}, want {fk_something_unmapped,23503}", path, u.Constraint, u.Code)
+		if unmappedErr.Constraint != "fk_something_unmapped" || unmappedErr.Code != sqlstateForeignKeyViolation {
+			t.Errorf("%s: carried {%q,%q}, want {fk_something_unmapped,23503}", path, unmappedErr.Constraint, unmappedErr.Code)
 		}
-		for _, s := range domainSentinels {
-			if errors.Is(got, s) {
-				t.Errorf("%s: unmapped constraint wrongly matched domain sentinel %v", path, s)
+		for _, sentinel := range domainSentinels {
+			if errors.Is(got, sentinel) {
+				t.Errorf("%s: unmapped constraint wrongly matched domain sentinel %v", path, sentinel)
 			}
 		}
 		// Raw pgconn detail is retained in the chain for diagnosis.
@@ -108,27 +108,27 @@ func TestTypedErrorsExtractViaAs(t *testing.T) {
 	id := uuid.New()
 
 	wrapped := fmt.Errorf("adding step: %w", &NotFoundError{Entity: entityStep, ID: id})
-	var nf *NotFoundError
-	if !errors.As(wrapped, &nf) {
+	var notFoundErr *NotFoundError
+	if !errors.As(wrapped, &notFoundErr) {
 		t.Fatalf("errors.As did not extract *NotFoundError from %v", wrapped)
 	}
-	if nf.Entity != entityStep || nf.ID != id {
-		t.Errorf("NotFoundError fields = {%q, %v}, want {%q, %v}", nf.Entity, nf.ID, entityStep, id)
+	if notFoundErr.Entity != entityStep || notFoundErr.ID != id {
+		t.Errorf("NotFoundError fields = {%q, %v}, want {%q, %v}", notFoundErr.Entity, notFoundErr.ID, entityStep, id)
 	}
 
-	var dup *DuplicateNameError
-	if !errors.As(&DuplicateNameError{Entity: entityAction, Name: "Approve"}, &dup) {
+	var duplicateErr *DuplicateNameError
+	if !errors.As(&DuplicateNameError{Entity: entityAction, Name: "Approve"}, &duplicateErr) {
 		t.Fatal("errors.As did not extract *DuplicateNameError")
 	}
-	if dup.Name != "Approve" {
-		t.Errorf("DuplicateNameError.Name = %q, want %q (original casing preserved)", dup.Name, "Approve")
+	if duplicateErr.Name != "Approve" {
+		t.Errorf("DuplicateNameError.Name = %q, want %q (original casing preserved)", duplicateErr.Name, "Approve")
 	}
 
-	var ref *ReferencedError
-	if !errors.As(&ReferencedError{Entity: entityStatus, ID: id}, &ref) {
+	var referencedErr *ReferencedError
+	if !errors.As(&ReferencedError{Entity: entityStatus, ID: id}, &referencedErr) {
 		t.Fatal("errors.As did not extract *ReferencedError")
 	}
-	if ref.Entity != entityStatus || ref.ID != id {
-		t.Errorf("ReferencedError fields = {%q, %v}, want {%q, %v}", ref.Entity, ref.ID, entityStatus, id)
+	if referencedErr.Entity != entityStatus || referencedErr.ID != id {
+		t.Errorf("ReferencedError fields = {%q, %v}, want {%q, %v}", referencedErr.Entity, referencedErr.ID, entityStatus, id)
 	}
 }

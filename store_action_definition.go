@@ -9,38 +9,38 @@ import (
 )
 
 func rowToAction(row pgx.CollectableRow) (ActionDefinition, error) {
-	var a ActionDefinition
-	err := row.Scan(&a.ID, &a.WorkflowDefinitionID, &a.StepDefinitionID, &a.Name,
-		&a.NextStepDefinitionID, &a.TerminalWorkflowStatusDefinitionID)
-	return a, err
+	var action ActionDefinition
+	err := row.Scan(&action.ID, &action.WorkflowDefinitionID, &action.StepDefinitionID, &action.Name,
+		&action.NextStepDefinitionID, &action.TerminalWorkflowStatusDefinitionID)
+	return action, err
 }
 
-func insertAction(ctx context.Context, q querier, a ActionDefinition) error {
+func insertAction(ctx context.Context, q querier, action ActionDefinition) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.action_definition
 		 (id, workflow_definition_id, step_definition_id, name,
 		  next_step_definition_id, terminal_workflow_status_definition_id)
 		 values ($1, $2, $3, $4, $5, $6)`,
-		a.ID, a.WorkflowDefinitionID, a.StepDefinitionID, a.Name,
-		a.NextStepDefinitionID, a.TerminalWorkflowStatusDefinitionID)
-	return mapWriteErr(err, a.Name)
+		action.ID, action.WorkflowDefinitionID, action.StepDefinitionID, action.Name,
+		action.NextStepDefinitionID, action.TerminalWorkflowStatusDefinitionID)
+	return mapWriteErr(err, action.Name)
 }
 
 func getActionRow(ctx context.Context, q querier, id uuid.UUID) (ActionDefinition, error) {
-	var a ActionDefinition
+	var action ActionDefinition
 	err := q.QueryRow(ctx,
 		`select id, workflow_definition_id, step_definition_id, name,
 		        next_step_definition_id, terminal_workflow_status_definition_id
 		 from flowcore.action_definition where id = $1`,
-		id).Scan(&a.ID, &a.WorkflowDefinitionID, &a.StepDefinitionID, &a.Name,
-		&a.NextStepDefinitionID, &a.TerminalWorkflowStatusDefinitionID)
+		id).Scan(&action.ID, &action.WorkflowDefinitionID, &action.StepDefinitionID, &action.Name,
+		&action.NextStepDefinitionID, &action.TerminalWorkflowStatusDefinitionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ActionDefinition{}, &NotFoundError{Entity: entityAction, ID: id}
 	}
 	if err != nil {
 		return ActionDefinition{}, err
 	}
-	return a, nil
+	return action, nil
 }
 
 // listActionsByDefinition returns every action in a definition, ordered so a

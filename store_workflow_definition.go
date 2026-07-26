@@ -29,17 +29,17 @@ func setInitialStep(ctx context.Context, q querier, definitionID, stepID uuid.UU
 }
 
 func getWorkflowDefinitionRow(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefinition, error) {
-	var d WorkflowDefinition
+	var definition WorkflowDefinition
 	err := q.QueryRow(ctx,
 		`select id, name, initial_step_definition_id from flowcore.workflow_definition where id = $1`,
-		id).Scan(&d.ID, &d.Name, &d.InitialStepDefinitionID)
+		id).Scan(&definition.ID, &definition.Name, &definition.InitialStepDefinitionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowDefinition{}, &NotFoundError{Entity: entityWorkflowDefinition, ID: id}
 	}
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
-	return d, nil
+	return definition, nil
 }
 
 // deleteWorkflowDefinition removes the definition; the schema's cascades clear

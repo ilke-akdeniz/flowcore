@@ -9,31 +9,31 @@ import (
 )
 
 func rowToStatus(row pgx.CollectableRow) (WorkflowStatusDefinition, error) {
-	var s WorkflowStatusDefinition
-	err := row.Scan(&s.ID, &s.WorkflowDefinitionID, &s.Name)
-	return s, err
+	var status WorkflowStatusDefinition
+	err := row.Scan(&status.ID, &status.WorkflowDefinitionID, &status.Name)
+	return status, err
 }
 
-func insertStatus(ctx context.Context, q querier, s WorkflowStatusDefinition) error {
+func insertStatus(ctx context.Context, q querier, status WorkflowStatusDefinition) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.workflow_status_definition (id, workflow_definition_id, name)
 		 values ($1, $2, $3)`,
-		s.ID, s.WorkflowDefinitionID, s.Name)
-	return mapWriteErr(err, s.Name)
+		status.ID, status.WorkflowDefinitionID, status.Name)
+	return mapWriteErr(err, status.Name)
 }
 
 func getStatusRow(ctx context.Context, q querier, id uuid.UUID) (WorkflowStatusDefinition, error) {
-	var s WorkflowStatusDefinition
+	var status WorkflowStatusDefinition
 	err := q.QueryRow(ctx,
 		`select id, workflow_definition_id, name from flowcore.workflow_status_definition where id = $1`,
-		id).Scan(&s.ID, &s.WorkflowDefinitionID, &s.Name)
+		id).Scan(&status.ID, &status.WorkflowDefinitionID, &status.Name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowStatusDefinition{}, &NotFoundError{Entity: entityStatus, ID: id}
 	}
 	if err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
-	return s, nil
+	return status, nil
 }
 
 func listStatusesByDefinition(ctx context.Context, q querier, definitionID uuid.UUID) ([]WorkflowStatusDefinition, error) {
