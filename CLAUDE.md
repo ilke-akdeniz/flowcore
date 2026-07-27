@@ -95,3 +95,95 @@ All docs (`CLAUDE.md`, `docs/*.md`) follow these, for clean git diffs and portab
 - **Bold lead-ins** (`**Term.**`) stay on the same line as the sentence they introduce.
 
 Tooling: `prettier --prose-wrap preserve` respects hand-placed sentence breaks while normalizing blank lines, list markers, and fences. Run it before committing doc changes. (`--prose-wrap never` would undo the one-sentence-per-line rule — don't use it.)
+
+## Go code style
+
+### Blank lines
+
+- Separate logical sections of a function with a blank line.
+- Don't add a blank line between a variable declaration and the `if`/`for`
+  block immediately below it if that block uses the variable.
+- Add a blank line after every `if`/`for` block.
+- Add a blank line before the final `return` statement in a function.
+
+### Long parameter lists
+
+Put each argument on its own line rather than packing them onto one line:
+
+```go
+step, err := catalog.AddStep(
+	ctx,
+	ids.workflow,
+	AddStepParams{
+		Name:       "vp review",
+		StatusID:   ids.status,
+		AssigneeID: ptr("group:vp"),
+	})
+```
+
+### Examples
+
+```go
+func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefinition, error) {
+	definition, err := getWorkflowDefinitionRow(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	statuses, err := listStatusesByDefinition(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	steps, err := listStepsByDefinition(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	actions, err := listActionsByDefinition(ctx, q, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	byStep := make(map[uuid.UUID][]ActionDefinition, len(steps))
+	for _, action := range actions {
+		byStep[action.StepDefinitionID] = append(byStep[action.StepDefinitionID], action)
+	}
+
+	for i := range steps {
+		stepActions := byStep[steps[i].ID]
+		if stepActions == nil {
+			stepActions = []ActionDefinition{}
+		}
+
+		steps[i].Actions = stepActions
+	}
+
+	definition.Statuses = statuses
+	definition.Steps = steps
+
+	return definition, nil
+}
+```
+
+```go
+func (c *Catalog) Get(ctx context.Context, id uuid.UUID) (WorkflowDefinition, error) {
+	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	definition, err := readDefinition(ctx, tx, id)
+	if err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return WorkflowDefinition{}, err
+	}
+
+	return definition, nil
+}
+```
