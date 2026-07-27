@@ -15,14 +15,14 @@ func TestCreateAndGetDeepTree(t *testing.T) {
 	definition, ids := twoStepDefinition("Expense")
 
 	created := mustCreate(t, catalog, definition)
-	if created.ID != ids.definition {
-		t.Errorf("created id = %v, want supplied %v", created.ID, ids.definition)
+	if created.ID != ids.workflow {
+		t.Errorf("created id = %v, want supplied %v", created.ID, ids.workflow)
 	}
-	if created.InitialStepDefinitionID == nil || *created.InitialStepDefinitionID != ids.managerStepID {
-		t.Errorf("initial step = %v, want %v", created.InitialStepDefinitionID, ids.managerStepID)
+	if created.InitialStepDefinitionID == nil || *created.InitialStepDefinitionID != ids.managerStep {
+		t.Errorf("initial step = %v, want %v", created.InitialStepDefinitionID, ids.managerStep)
 	}
 
-	got, err := catalog.Get(ctx, ids.definition)
+	got, err := catalog.Get(ctx, ids.workflow)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -42,12 +42,12 @@ func TestCreateAndGetDeepTree(t *testing.T) {
 	}
 	// Parent links populated by the read.
 	for _, step := range got.Steps {
-		if step.WorkflowDefinitionID != ids.definition {
-			t.Errorf("step %q WorkflowDefinitionID = %v, want %v", step.Name, step.WorkflowDefinitionID, ids.definition)
+		if step.WorkflowDefinitionID != ids.workflow {
+			t.Errorf("step %q WorkflowDefinitionID = %v, want %v", step.Name, step.WorkflowDefinitionID, ids.workflow)
 		}
 		for _, action := range step.Actions {
-			if action.WorkflowDefinitionID != ids.definition || action.StepDefinitionID != step.ID {
-				t.Errorf("action %q links = {%v,%v}, want {%v,%v}", action.Name, action.WorkflowDefinitionID, action.StepDefinitionID, ids.definition, step.ID)
+			if action.WorkflowDefinitionID != ids.workflow || action.StepDefinitionID != step.ID {
+				t.Errorf("action %q links = {%v,%v}, want {%v,%v}", action.Name, action.WorkflowDefinitionID, action.StepDefinitionID, ids.workflow, step.ID)
 			}
 		}
 	}
@@ -115,7 +115,7 @@ func TestCreateIsAtomic(t *testing.T) {
 	if !errors.Is(err, ErrDuplicateName) {
 		t.Fatalf("want ErrDuplicateName, got %v", err)
 	}
-	if _, err := catalog.Get(ctx, ids.definition); !errors.Is(err, ErrNotFound) {
+	if _, err := catalog.Get(ctx, ids.workflow); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get after failed Create: want ErrNotFound, got %v", err)
 	}
 	assertEmpty(t)
@@ -134,7 +134,7 @@ func TestCreateCommitPathMapsCrossDefinition(t *testing.T) {
 	// set (XOR holds), so the violation is a deferred FK that fires at commit —
 	// this exercises the Commit-error mapping path.
 	definition, _ := twoStepDefinition("Bad")
-	definition.Steps[0].Actions[0].NextStepDefinitionID = &other.directorStepID
+	definition.Steps[0].Actions[0].NextStepDefinitionID = &other.directorStep
 
 	_, err := catalog.Create(ctx, definition)
 	if !errors.Is(err, ErrCrossDefinition) {
@@ -196,10 +196,10 @@ func TestDeleteWorkflowDefinitionCascades(t *testing.T) {
 	definition, ids := twoStepDefinition("ToDelete")
 	mustCreate(t, catalog, definition)
 
-	if err := catalog.DeleteWorkflowDefinition(ctx, ids.definition); err != nil {
+	if err := catalog.DeleteWorkflowDefinition(ctx, ids.workflow); err != nil {
 		t.Fatalf("DeleteWorkflowDefinition: %v", err)
 	}
-	if _, err := catalog.Get(ctx, ids.definition); !errors.Is(err, ErrNotFound) {
+	if _, err := catalog.Get(ctx, ids.workflow); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get after delete: want ErrNotFound, got %v", err)
 	}
 	assertEmpty(t)
@@ -211,10 +211,10 @@ func TestNameLengthRejected(t *testing.T) {
 	definition, ids := twoStepDefinition("Lengths")
 	mustCreate(t, catalog, definition)
 
-	if _, err := catalog.AddStatus(ctx, ids.definition, AddStatusParams{Name: ""}); !errors.Is(err, ErrInvalidName) {
+	if _, err := catalog.AddStatus(ctx, ids.workflow, AddStatusParams{Name: ""}); !errors.Is(err, ErrInvalidName) {
 		t.Errorf("empty name: want ErrInvalidName, got %v", err)
 	}
-	if _, err := catalog.AddStatus(ctx, ids.definition, AddStatusParams{Name: strings.Repeat("x", 201)}); !errors.Is(err, ErrInvalidName) {
+	if _, err := catalog.AddStatus(ctx, ids.workflow, AddStatusParams{Name: strings.Repeat("x", 201)}); !errors.Is(err, ErrInvalidName) {
 		t.Errorf("201-char name: want ErrInvalidName, got %v", err)
 	}
 }

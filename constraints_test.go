@@ -18,7 +18,7 @@ func TestDuplicateNameMapping(t *testing.T) {
 	mustCreate(t, catalog, definition)
 
 	// status: "in progress" already exists.
-	_, err := catalog.AddStatus(ctx, ids.definition, AddStatusParams{Name: "In Progress"})
+	_, err := catalog.AddStatus(ctx, ids.workflow, AddStatusParams{Name: "In Progress"})
 	var duplicateErr *DuplicateNameError
 	if !errors.As(err, &duplicateErr) {
 		t.Fatalf("status dup: want *DuplicateNameError, got %v", err)
@@ -28,12 +28,12 @@ func TestDuplicateNameMapping(t *testing.T) {
 	}
 
 	// step: "manager review" already exists.
-	if _, err := catalog.AddStep(ctx, ids.definition, AddStepParams{Name: "Manager Review", StatusID: ids.status}); !errors.Is(err, ErrDuplicateName) {
+	if _, err := catalog.AddStep(ctx, ids.workflow, AddStepParams{Name: "Manager Review", StatusID: ids.status}); !errors.Is(err, ErrDuplicateName) {
 		t.Errorf("step dup: want ErrDuplicateName, got %v", err)
 	}
 
 	// action: "approve" already exists on manager review.
-	if _, err := catalog.AddAction(ctx, ids.managerStepID, AddActionParams{Name: "Approve", TerminalStatusID: &ids.status}); !errors.Is(err, ErrDuplicateName) {
+	if _, err := catalog.AddAction(ctx, ids.managerStep, AddActionParams{Name: "Approve", TerminalStatusID: &ids.status}); !errors.Is(err, ErrDuplicateName) {
 		t.Errorf("action dup: want ErrDuplicateName, got %v", err)
 	}
 }
@@ -46,12 +46,12 @@ func TestActionXORMapping(t *testing.T) {
 	definition, ids := twoStepDefinition("XOR")
 	mustCreate(t, catalog, definition)
 
-	both := AddActionParams{Name: "both", NextStepID: &ids.directorStepID, TerminalStatusID: &ids.status}
-	if _, err := catalog.AddAction(ctx, ids.managerStepID, both); !errors.Is(err, ErrInvalidAction) {
+	both := AddActionParams{Name: "both", NextStepID: &ids.directorStep, TerminalStatusID: &ids.status}
+	if _, err := catalog.AddAction(ctx, ids.managerStep, both); !errors.Is(err, ErrInvalidAction) {
 		t.Errorf("both set: want ErrInvalidAction, got %v", err)
 	}
 	neither := AddActionParams{Name: "neither"}
-	if _, err := catalog.AddAction(ctx, ids.managerStepID, neither); !errors.Is(err, ErrInvalidAction) {
+	if _, err := catalog.AddAction(ctx, ids.managerStep, neither); !errors.Is(err, ErrInvalidAction) {
 		t.Errorf("neither set: want ErrInvalidAction, got %v", err)
 	}
 }
@@ -67,15 +67,15 @@ func TestCrossDefinitionMapping(t *testing.T) {
 	mustCreate(t, catalog, definitionB)
 
 	// fk_step_definition_status: B's step using A's status.
-	if _, err := catalog.AddStep(ctx, b.definition, AddStepParams{Name: "x", StatusID: a.status}); !errors.Is(err, ErrCrossDefinition) {
+	if _, err := catalog.AddStep(ctx, b.workflow, AddStepParams{Name: "x", StatusID: a.status}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def step status: want ErrCrossDefinition, got %v", err)
 	}
 	// fk_action_definition_next_step: B's action routing to A's step.
-	if _, err := catalog.AddAction(ctx, b.managerStepID, AddActionParams{Name: "y", NextStepID: &a.directorStepID}); !errors.Is(err, ErrCrossDefinition) {
+	if _, err := catalog.AddAction(ctx, b.managerStep, AddActionParams{Name: "y", NextStepID: &a.directorStep}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def next step: want ErrCrossDefinition, got %v", err)
 	}
 	// fk_action_definition_terminal_status: B's action ending in A's status.
-	if _, err := catalog.AddAction(ctx, b.managerStepID, AddActionParams{Name: "z", TerminalStatusID: &a.status}); !errors.Is(err, ErrCrossDefinition) {
+	if _, err := catalog.AddAction(ctx, b.managerStep, AddActionParams{Name: "z", TerminalStatusID: &a.status}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def terminal status: want ErrCrossDefinition, got %v", err)
 	}
 }

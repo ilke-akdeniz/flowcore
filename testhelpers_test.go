@@ -101,7 +101,7 @@ func assertEmpty(t *testing.T) {
 // definitionIDs holds the explicit ids of a built definition so tests can
 // reference and delete specific rows.
 type definitionIDs struct {
-	definition, status, managerStepID, directorStepID uuid.UUID
+	workflow, status, managerStep, directorStep uuid.UUID
 }
 
 // twoStepDefinition builds a valid definition — one status, two steps
@@ -109,22 +109,22 @@ type definitionIDs struct {
 // at manager review. Ids are explicit so tests can target them.
 func twoStepDefinition(name string) (WorkflowDefinition, definitionIDs) {
 	ids := definitionIDs{
-		definition:     uuid.Must(uuid.NewV7()),
-		status:         uuid.Must(uuid.NewV7()),
-		managerStepID:  uuid.Must(uuid.NewV7()),
-		directorStepID: uuid.Must(uuid.NewV7()),
+		workflow:     uuid.Must(uuid.NewV7()),
+		status:       uuid.Must(uuid.NewV7()),
+		managerStep:  uuid.Must(uuid.NewV7()),
+		directorStep: uuid.Must(uuid.NewV7()),
 	}
 	definition := WorkflowDefinition{
-		ID:                      ids.definition,
+		ID:                      ids.workflow,
 		Name:                    name,
-		InitialStepDefinitionID: &ids.managerStepID,
+		InitialStepDefinitionID: &ids.managerStep,
 		Statuses:                []WorkflowStatusDefinition{{ID: ids.status, Name: "in progress"}},
 		Steps: []StepDefinition{
-			{ID: ids.managerStepID, WorkflowStatusDefinitionID: ids.status, Name: "manager review", Actions: []ActionDefinition{
-				{Name: "approve", NextStepDefinitionID: &ids.directorStepID},
+			{ID: ids.managerStep, WorkflowStatusDefinitionID: ids.status, Name: "manager review", Actions: []ActionDefinition{
+				{Name: "approve", NextStepDefinitionID: &ids.directorStep},
 				{Name: "reject", TerminalWorkflowStatusDefinitionID: &ids.status},
 			}},
-			{ID: ids.directorStepID, WorkflowStatusDefinitionID: ids.status, Name: "director review", Actions: []ActionDefinition{
+			{ID: ids.directorStep, WorkflowStatusDefinitionID: ids.status, Name: "director review", Actions: []ActionDefinition{
 				{Name: "approve", TerminalWorkflowStatusDefinitionID: &ids.status},
 			}},
 		},

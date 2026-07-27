@@ -14,7 +14,7 @@ func TestAddStepReturnsEmptyNonNilActions(t *testing.T) {
 	definition, ids := twoStepDefinition("AddStep")
 	mustCreate(t, catalog, definition)
 
-	step, err := catalog.AddStep(ctx, ids.definition,
+	step, err := catalog.AddStep(ctx, ids.workflow,
 		AddStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
@@ -39,7 +39,7 @@ func TestUpdateStepFullReplaceAndActionRefetch(t *testing.T) {
 	mustCreate(t, catalog, definition)
 
 	// manager review starts with an assignee via a fresh add so we can watch it clear.
-	step, err := catalog.AddStep(ctx, ids.definition,
+	step, err := catalog.AddStep(ctx, ids.workflow,
 		AddStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
@@ -79,7 +79,7 @@ func TestToUpdateRoundTrip(t *testing.T) {
 	// Grab manager review from the tree, change only its name via ToUpdate.
 	var managerStep StepDefinition
 	for _, step := range created.Steps {
-		if step.ID == ids.managerStepID {
+		if step.ID == ids.managerStep {
 			managerStep = step
 		}
 	}
@@ -87,7 +87,7 @@ func TestToUpdateRoundTrip(t *testing.T) {
 	params := managerStep.ToUpdate()
 	params.Name = "Manager Sign-off"
 
-	updated, err := catalog.UpdateStep(ctx, ids.managerStepID, params)
+	updated, err := catalog.UpdateStep(ctx, ids.managerStep, params)
 
 	if err != nil {
 		t.Fatalf("UpdateStep: %v", err)
@@ -117,16 +117,16 @@ func TestUpdateStatusAndAction(t *testing.T) {
 	}
 
 	// Add an action, then flip it from terminal to routing via update.
-	added, err := catalog.AddAction(ctx, ids.managerStepID, AddActionParams{Name: "escalate", TerminalStatusID: &ids.status})
+	added, err := catalog.AddAction(ctx, ids.managerStep, AddActionParams{Name: "escalate", TerminalStatusID: &ids.status})
 	if err != nil {
 		t.Fatalf("AddAction: %v", err)
 	}
-	upd, err := catalog.UpdateAction(ctx, added.ID, UpdateActionParams{Name: "escalate", NextStepID: &ids.directorStepID})
+	upd, err := catalog.UpdateAction(ctx, added.ID, UpdateActionParams{Name: "escalate", NextStepID: &ids.directorStep})
 	if err != nil {
 		t.Fatalf("UpdateAction: %v", err)
 	}
-	if upd.NextStepDefinitionID == nil || *upd.NextStepDefinitionID != ids.directorStepID {
-		t.Errorf("next step = %v, want %v", upd.NextStepDefinitionID, ids.directorStepID)
+	if upd.NextStepDefinitionID == nil || *upd.NextStepDefinitionID != ids.directorStep {
+		t.Errorf("next step = %v, want %v", upd.NextStepDefinitionID, ids.directorStep)
 	}
 	if upd.TerminalWorkflowStatusDefinitionID != nil {
 		t.Errorf("terminal status = %v, want nil after flip to routing", *upd.TerminalWorkflowStatusDefinitionID)
@@ -140,7 +140,7 @@ func TestDeleteStatusStepAction(t *testing.T) {
 	mustCreate(t, catalog, definition)
 
 	// Add an unreferenced status and delete it — allowed.
-	extra, err := catalog.AddStatus(ctx, ids.definition, AddStatusParams{Name: "spare"})
+	extra, err := catalog.AddStatus(ctx, ids.workflow, AddStatusParams{Name: "spare"})
 	if err != nil {
 		t.Fatalf("AddStatus: %v", err)
 	}
@@ -149,13 +149,13 @@ func TestDeleteStatusStepAction(t *testing.T) {
 	}
 
 	// Delete an action — nothing references actions, always allowed.
-	got, err := catalog.Get(ctx, ids.definition)
+	got, err := catalog.Get(ctx, ids.workflow)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	var actionID uuid.UUID
 	for _, step := range got.Steps {
-		if step.ID == ids.managerStepID {
+		if step.ID == ids.managerStep {
 			actionID = step.Actions[0].ID
 		}
 	}
