@@ -20,13 +20,14 @@ func TestAddStepReturnsEmptyNonNilActions(t *testing.T) {
 			StatusID:   ids.status,
 			AssigneeID: ptr("group:vp"),
 		})
-
 	if err != nil {
 		t.Fatalf("AddStep: %v", err)
 	}
+
 	if step.Actions == nil || len(step.Actions) != 0 {
 		t.Errorf("AddStep Actions = %v, want empty non-nil", step.Actions)
 	}
+
 	if step.AssigneeID == nil || *step.AssigneeID != "group:vp" {
 		t.Errorf("AssigneeID = %v, want group:vp", step.AssigneeID)
 	}
@@ -45,10 +46,10 @@ func TestUpdateStepFullReplaceAndActionRefetch(t *testing.T) {
 			StatusID:   ids.status,
 			AssigneeID: ptr("group:vp"),
 		})
-
 	if err != nil {
 		t.Fatalf("AddStep: %v", err)
 	}
+
 	if _, err := catalog.AddAction(ctx, step.ID, AddActionParams{Name: "approve", TerminalStatusID: &ids.status}); err != nil {
 		t.Fatalf("AddAction: %v", err)
 	}
@@ -58,12 +59,15 @@ func TestUpdateStepFullReplaceAndActionRefetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateStep: %v", err)
 	}
+
 	if updated.Name != "VP Review" {
 		t.Errorf("name = %q, want VP Review", updated.Name)
 	}
+
 	if updated.AssigneeID != nil {
 		t.Errorf("assignee = %v, want nil (full replace clears)", *updated.AssigneeID)
 	}
+
 	// Actions re-fetched and populated on return.
 	if len(updated.Actions) != 1 {
 		t.Errorf("returned actions = %d, want 1 (re-fetched)", len(updated.Actions))
@@ -88,10 +92,10 @@ func TestToUpdateRoundTrip(t *testing.T) {
 	params.Name = "Manager Sign-off"
 
 	updated, err := catalog.UpdateStep(ctx, ids.managerStep, params)
-
 	if err != nil {
 		t.Fatalf("UpdateStep: %v", err)
 	}
+
 	if updated.Name != "Manager Sign-off" {
 		t.Errorf("name = %q, want Manager Sign-off", updated.Name)
 	}
@@ -112,6 +116,7 @@ func TestUpdateStatusAndAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
+
 	if got.Name != "In Review" {
 		t.Errorf("status name = %q, want In Review", got.Name)
 	}
@@ -121,13 +126,16 @@ func TestUpdateStatusAndAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddAction: %v", err)
 	}
+
 	upd, err := catalog.UpdateAction(ctx, added.ID, UpdateActionParams{Name: "escalate", NextStepID: &ids.directorStep})
 	if err != nil {
 		t.Fatalf("UpdateAction: %v", err)
 	}
+
 	if upd.NextStepDefinitionID == nil || *upd.NextStepDefinitionID != ids.directorStep {
 		t.Errorf("next step = %v, want %v", upd.NextStepDefinitionID, ids.directorStep)
 	}
+
 	if upd.TerminalWorkflowStatusDefinitionID != nil {
 		t.Errorf("terminal status = %v, want nil after flip to routing", *upd.TerminalWorkflowStatusDefinitionID)
 	}
@@ -144,6 +152,7 @@ func TestDeleteStatusStepAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddStatus: %v", err)
 	}
+
 	if err := catalog.DeleteStatus(ctx, extra.ID); err != nil {
 		t.Errorf("DeleteStatus (unreferenced): %v", err)
 	}
@@ -153,12 +162,14 @@ func TestDeleteStatusStepAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+
 	var actionID uuid.UUID
 	for _, step := range got.Steps {
 		if step.ID == ids.managerStep {
 			actionID = step.Actions[0].ID
 		}
 	}
+
 	if err := catalog.DeleteAction(ctx, actionID); err != nil {
 		t.Errorf("DeleteAction: %v", err)
 	}
@@ -213,6 +224,7 @@ func TestNotFoundCarriesEntityAndID(t *testing.T) {
 	if !errors.As(err, &notFoundErr) {
 		t.Fatalf("want *NotFoundError, got %v", err)
 	}
+
 	if notFoundErr.Entity != entityStep || notFoundErr.ID != missing {
 		t.Errorf("NotFoundError = {%q,%v}, want {%q,%v}", notFoundErr.Entity, notFoundErr.ID, entityStep, missing)
 	}

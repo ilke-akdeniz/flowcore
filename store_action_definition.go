@@ -12,6 +12,7 @@ func rowToAction(row pgx.CollectableRow) (ActionDefinition, error) {
 	var action ActionDefinition
 	err := row.Scan(&action.ID, &action.WorkflowDefinitionID, &action.StepDefinitionID, &action.Name,
 		&action.NextStepDefinitionID, &action.TerminalWorkflowStatusDefinitionID)
+
 	return action, err
 }
 
@@ -23,6 +24,7 @@ func insertAction(ctx context.Context, q querier, action ActionDefinition) error
 		 values ($1, $2, $3, $4, $5, $6)`,
 		action.ID, action.WorkflowDefinitionID, action.StepDefinitionID, action.Name,
 		action.NextStepDefinitionID, action.TerminalWorkflowStatusDefinitionID)
+
 	return mapWriteErr(err, action.Name)
 }
 
@@ -37,9 +39,11 @@ func getActionRow(ctx context.Context, q querier, id uuid.UUID) (ActionDefinitio
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ActionDefinition{}, &NotFoundError{Entity: entityAction, ID: id}
 	}
+
 	if err != nil {
 		return ActionDefinition{}, err
 	}
+
 	return action, nil
 }
 
@@ -56,6 +60,7 @@ func listActionsByDefinition(ctx context.Context, q querier, definitionID uuid.U
 	if err != nil {
 		return nil, err
 	}
+
 	return collectActions(rows)
 }
 
@@ -69,6 +74,7 @@ func listActionsByStep(ctx context.Context, q querier, stepID uuid.UUID) ([]Acti
 	if err != nil {
 		return nil, err
 	}
+
 	return collectActions(rows)
 }
 
@@ -77,9 +83,11 @@ func collectActions(rows pgx.Rows) ([]ActionDefinition, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if actions == nil {
 		actions = []ActionDefinition{}
 	}
+
 	return actions, nil
 }
 
@@ -92,9 +100,11 @@ func updateAction(ctx context.Context, q querier, id uuid.UUID, p UpdateActionPa
 	if err != nil {
 		return mapWriteErr(err, p.Name)
 	}
+
 	if tag.RowsAffected() == 0 {
 		return &NotFoundError{Entity: entityAction, ID: id}
 	}
+
 	return nil
 }
 
@@ -103,8 +113,10 @@ func deleteAction(ctx context.Context, q querier, id uuid.UUID) error {
 	if err != nil {
 		return mapDeleteErr(err, entityAction, id)
 	}
+
 	if tag.RowsAffected() == 0 {
 		return &NotFoundError{Entity: entityAction, ID: id}
 	}
+
 	return nil
 }

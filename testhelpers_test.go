@@ -29,6 +29,7 @@ func TestMain(m *testing.M) {
 	if dsn == "" {
 		dsn = defaultTestDSN
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -44,6 +45,7 @@ func TestMain(m *testing.M) {
 	if testPool != nil {
 		testPool.Close()
 	}
+
 	os.Exit(code)
 }
 
@@ -53,12 +55,14 @@ func schemaReady(ctx context.Context, pool *pgxpool.Pool) bool {
 	if err := pool.Ping(ctx); err != nil {
 		return false
 	}
+
 	var exists bool
 	err := pool.QueryRow(ctx,
 		`select exists (
 			select 1 from information_schema.tables
 			where table_schema = 'flowcore' and table_name = 'workflow_definition'
 		)`).Scan(&exists)
+
 	return err == nil && exists
 }
 
@@ -70,9 +74,11 @@ func newCatalog(t *testing.T) *Catalog {
 	if testPool == nil {
 		t.Skip("no test database: set FLOWCORE_TEST_DSN and run `make migrate-test` (see Makefile)")
 	}
+
 	if _, err := testPool.Exec(context.Background(), "truncate flowcore.workflow_definition cascade"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
+
 	return NewCatalog(testPool)
 }
 
@@ -84,6 +90,7 @@ func rowCount(t *testing.T, table string) int {
 	if err := testPool.QueryRow(context.Background(), "select count(*) from flowcore."+table).Scan(&n); err != nil {
 		t.Fatalf("count %s: %v", table, err)
 	}
+
 	return n
 }
 
@@ -129,6 +136,7 @@ func twoStepDefinition(name string) (WorkflowDefinition, definitionIDs) {
 			}},
 		},
 	}
+
 	return definition, ids
 }
 
@@ -138,5 +146,6 @@ func mustCreate(t *testing.T, catalog *Catalog, definition WorkflowDefinition) W
 	if err != nil {
 		t.Fatalf("Create(%q): %v", definition.Name, err)
 	}
+
 	return created
 }

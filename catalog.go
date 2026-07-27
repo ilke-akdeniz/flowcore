@@ -55,26 +55,31 @@ func (c *Catalog) Create(ctx context.Context, definition WorkflowDefinition) (Wo
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := insertWorkflowDefinition(ctx, tx, definition.ID, definition.Name); err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	for _, status := range definition.Statuses {
 		if err := insertStatus(ctx, tx, status); err != nil {
 			return WorkflowDefinition{}, err
 		}
 	}
+
 	for _, step := range definition.Steps {
 		if err := insertStep(ctx, tx, step); err != nil {
 			return WorkflowDefinition{}, err
 		}
+
 		for _, action := range step.Actions {
 			if err := insertAction(ctx, tx, action); err != nil {
 				return WorkflowDefinition{}, err
 			}
 		}
 	}
+
 	if err := setInitialStep(ctx, tx, definition.ID, *definition.InitialStepDefinitionID); err != nil {
 		return WorkflowDefinition{}, err
 	}
@@ -92,6 +97,7 @@ func (c *Catalog) Create(ctx context.Context, definition WorkflowDefinition) (Wo
 	if err := tx.Commit(ctx); err != nil {
 		return WorkflowDefinition{}, mapWriteErr(err, "")
 	}
+
 	return result, nil
 }
 
@@ -103,15 +109,18 @@ func (c *Catalog) Get(ctx context.Context, id uuid.UUID) (WorkflowDefinition, er
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	definition, err := readDefinition(ctx, tx, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	return definition, nil
 }
 
@@ -128,14 +137,17 @@ func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID,
 	if _, err := getWorkflowDefinitionRow(ctx, c.pool, workflowDefinitionID); err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
+
 	id, err := uuid.NewV7()
 	if err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
+
 	status := WorkflowStatusDefinition{ID: id, WorkflowDefinitionID: workflowDefinitionID, Name: p.Name}
 	if err := insertStatus(ctx, c.pool, status); err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
+
 	return status, nil
 }
 
@@ -144,6 +156,7 @@ func (c *Catalog) UpdateStatus(ctx context.Context, statusID uuid.UUID, p Update
 	if err := updateStatus(ctx, c.pool, statusID, p); err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
+
 	return getStatusRow(ctx, c.pool, statusID)
 }
 
@@ -160,10 +173,12 @@ func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p
 	if _, err := getWorkflowDefinitionRow(ctx, c.pool, workflowDefinitionID); err != nil {
 		return StepDefinition{}, err
 	}
+
 	id, err := uuid.NewV7()
 	if err != nil {
 		return StepDefinition{}, err
 	}
+
 	step := StepDefinition{
 		ID:                         id,
 		WorkflowDefinitionID:       workflowDefinitionID,
@@ -174,7 +189,9 @@ func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p
 	if err := insertStep(ctx, c.pool, step); err != nil {
 		return StepDefinition{}, err
 	}
+
 	step.Actions = []ActionDefinition{}
+
 	return step, nil
 }
 
@@ -186,15 +203,19 @@ func (c *Catalog) UpdateStep(ctx context.Context, stepID uuid.UUID, p UpdateStep
 	if err := updateStep(ctx, c.pool, stepID, p); err != nil {
 		return StepDefinition{}, err
 	}
+
 	step, err := getStepRow(ctx, c.pool, stepID)
 	if err != nil {
 		return StepDefinition{}, err
 	}
+
 	actions, err := listActionsByStep(ctx, c.pool, stepID)
 	if err != nil {
 		return StepDefinition{}, err
 	}
+
 	step.Actions = actions
+
 	return step, nil
 }
 
@@ -213,10 +234,12 @@ func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p A
 	if err != nil {
 		return ActionDefinition{}, err
 	}
+
 	id, err := uuid.NewV7()
 	if err != nil {
 		return ActionDefinition{}, err
 	}
+
 	action := ActionDefinition{
 		ID:                                 id,
 		WorkflowDefinitionID:               step.WorkflowDefinitionID,
@@ -228,6 +251,7 @@ func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p A
 	if err := insertAction(ctx, c.pool, action); err != nil {
 		return ActionDefinition{}, err
 	}
+
 	return action, nil
 }
 
@@ -237,6 +261,7 @@ func (c *Catalog) UpdateAction(ctx context.Context, actionID uuid.UUID, p Update
 	if err := updateAction(ctx, c.pool, actionID, p); err != nil {
 		return ActionDefinition{}, err
 	}
+
 	return getActionRow(ctx, c.pool, actionID)
 }
 
@@ -254,14 +279,17 @@ func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefin
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	statuses, err := listStatusesByDefinition(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	steps, err := listStepsByDefinition(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	actions, err := listActionsByDefinition(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
@@ -271,16 +299,19 @@ func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefin
 	for _, action := range actions {
 		byStep[action.StepDefinitionID] = append(byStep[action.StepDefinitionID], action)
 	}
+
 	for i := range steps {
 		stepActions := byStep[steps[i].ID]
 		if stepActions == nil {
 			stepActions = []ActionDefinition{}
 		}
+
 		steps[i].Actions = stepActions
 	}
 
 	definition.Statuses = statuses
 	definition.Steps = steps
+
 	return definition, nil
 }
 
@@ -296,6 +327,7 @@ func (def WorkflowDefinition) clone() WorkflowDefinition {
 		cp.Actions = append([]ActionDefinition(nil), step.Actions...)
 		out.Steps[i] = cp
 	}
+
 	return out
 }
 
@@ -306,25 +338,32 @@ func fillIDs(d *WorkflowDefinition) error {
 	if d.ID, err = ensureID(d.ID); err != nil {
 		return err
 	}
+
 	for i := range d.Statuses {
 		if d.Statuses[i].ID, err = ensureID(d.Statuses[i].ID); err != nil {
 			return err
 		}
+
 		d.Statuses[i].WorkflowDefinitionID = d.ID
 	}
+
 	for i := range d.Steps {
 		if d.Steps[i].ID, err = ensureID(d.Steps[i].ID); err != nil {
 			return err
 		}
+
 		d.Steps[i].WorkflowDefinitionID = d.ID
+
 		for j := range d.Steps[i].Actions {
 			if d.Steps[i].Actions[j].ID, err = ensureID(d.Steps[i].Actions[j].ID); err != nil {
 				return err
 			}
+
 			d.Steps[i].Actions[j].WorkflowDefinitionID = d.ID
 			d.Steps[i].Actions[j].StepDefinitionID = d.Steps[i].ID
 		}
 	}
+
 	return nil
 }
 
@@ -332,6 +371,7 @@ func ensureID(id uuid.UUID) (uuid.UUID, error) {
 	if id != uuid.Nil {
 		return id, nil
 	}
+
 	return uuid.NewV7()
 }
 
@@ -341,5 +381,6 @@ func stepExists(steps []StepDefinition, id uuid.UUID) bool {
 			return true
 		}
 	}
+
 	return false
 }

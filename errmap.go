@@ -54,13 +54,16 @@ func mapWriteErr(err error, name string) error {
 	if err == nil {
 		return nil
 	}
+
 	pg := asPgError(err)
 	if pg == nil {
 		return err
 	}
+
 	if mapped, ok := mapConstraintCommon(pg, name); ok {
 		return mapped
 	}
+
 	if pg.Code == sqlstateForeignKeyViolation {
 		switch pg.ConstraintName {
 		case fkStepStatus, fkActionNextStep, fkActionTerminalStatus, fkInitialStep:
@@ -68,6 +71,7 @@ func mapWriteErr(err error, name string) error {
 		}
 		return unmapped(pg)
 	}
+
 	return err
 }
 
@@ -80,13 +84,16 @@ func mapDeleteErr(err error, entity string, id uuid.UUID) error {
 	if err == nil {
 		return nil
 	}
+
 	pg := asPgError(err)
 	if pg == nil {
 		return err
 	}
+
 	if mapped, ok := mapConstraintCommon(pg, ""); ok {
 		return mapped
 	}
+
 	if pg.Code == sqlstateForeignKeyViolation {
 		switch pg.ConstraintName {
 		case fkStepStatus, fkActionNextStep, fkActionTerminalStatus, fkInitialStep:
@@ -94,6 +101,7 @@ func mapDeleteErr(err error, entity string, id uuid.UUID) error {
 		}
 		return unmapped(pg)
 	}
+
 	return err
 }
 
@@ -125,6 +133,7 @@ func mapConstraintCommon(pg *pgconn.PgError, name string) (error, bool) {
 		}
 		return unmapped(pg), true
 	}
+
 	return nil, false
 }
 
@@ -137,5 +146,6 @@ func asPgError(err error) *pgconn.PgError {
 	if errors.As(err, &pg) {
 		return pg
 	}
+
 	return nil
 }

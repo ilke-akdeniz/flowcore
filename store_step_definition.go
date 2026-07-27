@@ -13,6 +13,7 @@ import (
 func rowToStep(row pgx.CollectableRow) (StepDefinition, error) {
 	var step StepDefinition
 	err := row.Scan(&step.ID, &step.WorkflowDefinitionID, &step.WorkflowStatusDefinitionID, &step.AssigneeID, &step.Name)
+
 	return step, err
 }
 
@@ -22,6 +23,7 @@ func insertStep(ctx context.Context, q querier, step StepDefinition) error {
 		 (id, workflow_definition_id, workflow_status_definition_id, assignee_id, name)
 		 values ($1, $2, $3, $4, $5)`,
 		step.ID, step.WorkflowDefinitionID, step.WorkflowStatusDefinitionID, step.AssigneeID, step.Name)
+
 	return mapWriteErr(err, step.Name)
 }
 
@@ -34,9 +36,11 @@ func getStepRow(ctx context.Context, q querier, id uuid.UUID) (StepDefinition, e
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StepDefinition{}, &NotFoundError{Entity: entityStep, ID: id}
 	}
+
 	if err != nil {
 		return StepDefinition{}, err
 	}
+
 	return step, nil
 }
 
@@ -48,13 +52,16 @@ func listStepsByDefinition(ctx context.Context, q querier, definitionID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
+
 	steps, err := pgx.CollectRows(rows, rowToStep)
 	if err != nil {
 		return nil, err
 	}
+
 	if steps == nil {
 		steps = []StepDefinition{}
 	}
+
 	return steps, nil
 }
 
@@ -67,9 +74,11 @@ func updateStep(ctx context.Context, q querier, id uuid.UUID, p UpdateStepParams
 	if err != nil {
 		return mapWriteErr(err, p.Name)
 	}
+
 	if tag.RowsAffected() == 0 {
 		return &NotFoundError{Entity: entityStep, ID: id}
 	}
+
 	return nil
 }
 
@@ -78,8 +87,10 @@ func deleteStep(ctx context.Context, q querier, id uuid.UUID) error {
 	if err != nil {
 		return mapDeleteErr(err, entityStep, id)
 	}
+
 	if tag.RowsAffected() == 0 {
 		return &NotFoundError{Entity: entityStep, ID: id}
 	}
+
 	return nil
 }

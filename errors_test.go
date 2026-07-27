@@ -31,18 +31,22 @@ func TestUnmappedConstraintFailsLoud(t *testing.T) {
 		if !errors.Is(got, ErrUnmappedConstraint) {
 			t.Errorf("%s: want ErrUnmappedConstraint, got %v", path, got)
 		}
+
 		var unmappedErr *UnmappedConstraintError
 		if !errors.As(got, &unmappedErr) {
 			t.Fatalf("%s: want *UnmappedConstraintError, got %v", path, got)
 		}
+
 		if unmappedErr.Constraint != "fk_something_unmapped" || unmappedErr.Code != sqlstateForeignKeyViolation {
 			t.Errorf("%s: carried {%q,%q}, want {fk_something_unmapped,23503}", path, unmappedErr.Constraint, unmappedErr.Code)
 		}
+
 		for _, sentinel := range domainSentinels {
 			if errors.Is(got, sentinel) {
 				t.Errorf("%s: unmapped constraint wrongly matched domain sentinel %v", path, sentinel)
 			}
 		}
+
 		// Raw pgconn detail is retained in the chain for diagnosis.
 		var pg *pgconn.PgError
 		if !errors.As(got, &pg) {
@@ -61,6 +65,7 @@ func TestUnmappedConstraintFailsLoud(t *testing.T) {
 	if !errors.Is(mapWriteErr(knownFK, "n"), ErrCrossDefinition) {
 		t.Error("recognized FK no longer maps to CrossDefinition on write")
 	}
+
 	if !errors.Is(mapDeleteErr(knownFK, entityStep, uuid.New()), ErrReferenced) {
 		t.Error("recognized FK no longer maps to Referenced on delete")
 	}
@@ -90,10 +95,12 @@ func TestTypedErrorsWrapSentinels(t *testing.T) {
 		if !errors.Is(c.err, c.sentinel) {
 			t.Errorf("%T: errors.Is(err, %v) = false, want true", c.err, c.sentinel)
 		}
+
 		for _, other := range all {
 			if other == c.sentinel {
 				continue
 			}
+
 			if errors.Is(c.err, other) {
 				t.Errorf("%T matched foreign sentinel %v", c.err, other)
 			}
@@ -112,6 +119,7 @@ func TestTypedErrorsExtractViaAs(t *testing.T) {
 	if !errors.As(wrapped, &notFoundErr) {
 		t.Fatalf("errors.As did not extract *NotFoundError from %v", wrapped)
 	}
+
 	if notFoundErr.Entity != entityStep || notFoundErr.ID != id {
 		t.Errorf("NotFoundError fields = {%q, %v}, want {%q, %v}", notFoundErr.Entity, notFoundErr.ID, entityStep, id)
 	}
@@ -120,6 +128,7 @@ func TestTypedErrorsExtractViaAs(t *testing.T) {
 	if !errors.As(&DuplicateNameError{Entity: entityAction, Name: "Approve"}, &duplicateErr) {
 		t.Fatal("errors.As did not extract *DuplicateNameError")
 	}
+
 	if duplicateErr.Name != "Approve" {
 		t.Errorf("DuplicateNameError.Name = %q, want %q (original casing preserved)", duplicateErr.Name, "Approve")
 	}
@@ -128,6 +137,7 @@ func TestTypedErrorsExtractViaAs(t *testing.T) {
 	if !errors.As(&ReferencedError{Entity: entityStatus, ID: id}, &referencedErr) {
 		t.Fatal("errors.As did not extract *ReferencedError")
 	}
+
 	if referencedErr.Entity != entityStatus || referencedErr.ID != id {
 		t.Errorf("ReferencedError fields = {%q, %v}, want {%q, %v}", referencedErr.Entity, referencedErr.ID, entityStatus, id)
 	}

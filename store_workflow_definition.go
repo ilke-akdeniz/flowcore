@@ -15,6 +15,7 @@ func insertWorkflowDefinition(ctx context.Context, q querier, id uuid.UUID, name
 	_, err := q.Exec(ctx,
 		`insert into flowcore.workflow_definition (id, name) values ($1, $2)`,
 		id, name)
+
 	return mapWriteErr(err, name)
 }
 
@@ -25,6 +26,7 @@ func setInitialStep(ctx context.Context, q querier, definitionID, stepID uuid.UU
 	_, err := q.Exec(ctx,
 		`update flowcore.workflow_definition set initial_step_definition_id = $2 where id = $1`,
 		definitionID, stepID)
+
 	return mapWriteErr(err, "")
 }
 
@@ -36,9 +38,11 @@ func getWorkflowDefinitionRow(ctx context.Context, q querier, id uuid.UUID) (Wor
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowDefinition{}, &NotFoundError{Entity: entityWorkflowDefinition, ID: id}
 	}
+
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
+
 	return definition, nil
 }
 
@@ -50,8 +54,10 @@ func deleteWorkflowDefinition(ctx context.Context, q querier, id uuid.UUID) erro
 	if err != nil {
 		return mapDeleteErr(err, entityWorkflowDefinition, id)
 	}
+
 	if tag.RowsAffected() == 0 {
 		return &NotFoundError{Entity: entityWorkflowDefinition, ID: id}
 	}
+
 	return nil
 }

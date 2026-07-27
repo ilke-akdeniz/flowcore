@@ -23,6 +23,7 @@ func TestDuplicateNameMapping(t *testing.T) {
 	if !errors.As(err, &duplicateErr) {
 		t.Fatalf("status dup: want *DuplicateNameError, got %v", err)
 	}
+
 	if duplicateErr.Entity != entityStatus || duplicateErr.Name != "In Progress" {
 		t.Errorf("status dup = {%q,%q}, want {%q,%q}", duplicateErr.Entity, duplicateErr.Name, entityStatus, "In Progress")
 	}
@@ -50,6 +51,7 @@ func TestActionXORMapping(t *testing.T) {
 	if _, err := catalog.AddAction(ctx, ids.managerStep, both); !errors.Is(err, ErrInvalidAction) {
 		t.Errorf("both set: want ErrInvalidAction, got %v", err)
 	}
+
 	neither := AddActionParams{Name: "neither"}
 	if _, err := catalog.AddAction(ctx, ids.managerStep, neither); !errors.Is(err, ErrInvalidAction) {
 		t.Errorf("neither set: want ErrInvalidAction, got %v", err)
@@ -70,10 +72,12 @@ func TestCrossDefinitionMapping(t *testing.T) {
 	if _, err := catalog.AddStep(ctx, b.workflow, AddStepParams{Name: "x", StatusID: a.status}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def step status: want ErrCrossDefinition, got %v", err)
 	}
+
 	// fk_action_definition_next_step: B's action routing to A's step.
 	if _, err := catalog.AddAction(ctx, b.managerStep, AddActionParams{Name: "y", NextStepID: &a.directorStep}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def next step: want ErrCrossDefinition, got %v", err)
 	}
+
 	// fk_action_definition_terminal_status: B's action ending in A's status.
 	if _, err := catalog.AddAction(ctx, b.managerStep, AddActionParams{Name: "z", TerminalStatusID: &a.status}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def terminal status: want ErrCrossDefinition, got %v", err)
@@ -125,6 +129,7 @@ func TestReferencedDeleteMapping(t *testing.T) {
 			t.Errorf("%s: want *ReferencedError, got %v", tc.name, err)
 			continue
 		}
+
 		if referencedErr.Entity != tc.entity || referencedErr.ID != tc.id {
 			t.Errorf("%s: ReferencedError = {%q,%v}, want {%q,%v}", tc.name, referencedErr.Entity, referencedErr.ID, tc.entity, tc.id)
 		}

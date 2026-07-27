@@ -11,6 +11,7 @@ import (
 func rowToStatus(row pgx.CollectableRow) (WorkflowStatusDefinition, error) {
 	var status WorkflowStatusDefinition
 	err := row.Scan(&status.ID, &status.WorkflowDefinitionID, &status.Name)
+
 	return status, err
 }
 
@@ -19,6 +20,7 @@ func insertStatus(ctx context.Context, q querier, status WorkflowStatusDefinitio
 		`insert into flowcore.workflow_status_definition (id, workflow_definition_id, name)
 		 values ($1, $2, $3)`,
 		status.ID, status.WorkflowDefinitionID, status.Name)
+
 	return mapWriteErr(err, status.Name)
 }
 
@@ -30,9 +32,11 @@ func getStatusRow(ctx context.Context, q querier, id uuid.UUID) (WorkflowStatusD
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowStatusDefinition{}, &NotFoundError{Entity: entityStatus, ID: id}
 	}
+
 	if err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
+
 	return status, nil
 }
 
@@ -44,13 +48,16 @@ func listStatusesByDefinition(ctx context.Context, q querier, definitionID uuid.
 	if err != nil {
 		return nil, err
 	}
+
 	statuses, err := pgx.CollectRows(rows, rowToStatus)
 	if err != nil {
 		return nil, err
 	}
+
 	if statuses == nil {
 		statuses = []WorkflowStatusDefinition{}
 	}
+
 	return statuses, nil
 }
 
@@ -61,9 +68,11 @@ func updateStatus(ctx context.Context, q querier, id uuid.UUID, p UpdateStatusPa
 	if err != nil {
 		return mapWriteErr(err, p.Name)
 	}
+
 	if tag.RowsAffected() == 0 {
 		return &NotFoundError{Entity: entityStatus, ID: id}
 	}
+
 	return nil
 }
 
@@ -72,8 +81,10 @@ func deleteStatus(ctx context.Context, q querier, id uuid.UUID) error {
 	if err != nil {
 		return mapDeleteErr(err, entityStatus, id)
 	}
+
 	if tag.RowsAffected() == 0 {
 		return &NotFoundError{Entity: entityStatus, ID: id}
 	}
+
 	return nil
 }
