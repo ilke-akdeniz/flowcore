@@ -137,6 +137,62 @@ func TestCrossDefinitionMappingOnUpdate(t *testing.T) {
 	}
 }
 
+// TestCascadeDriverFKMapsToNotFound covers the three parent foreign keys, which
+// are what enforce parent existence now that the pre-flight reads are gone
+// (decision 20). Without this the coverage would be incidental: the not-found
+// matrix exercises these same paths, but would still pass if they were enforced
+// by a read instead of by the constraint.
+//
+// The action case is provoked at the store rather than through AddAction, which
+// still reads its step first — for the workflow_definition_id it needs, not as a
+// check. The only way its insert sees a missing step is a concurrent delete, and
+// calling the store directly reproduces that state without the timing.
+func TestCascadeDriverFKMapsToNotFound(t *testing.T) {
+	catalog := newCatalog(t)
+	ctx := context.Background()
+	missing := uuid.Must(uuid.NewV7())
+
+	var notFoundErr *NotFoundError
+
+	// fk_workflow_status_definition_workflow
+	_, err := catalog.AddStatus(ctx, missing, AddStatusParams{Name: "orphan"})
+	if !errors.As(err, &notFoundErr) || notFoundErr.Entity != entityWorkflowDefinition {
+		t.Errorf("AddStatus with missing definition: want NotFoundError on the definition, got %v", err)
+	}
+
+	// fk_step_definition_workflow. The status reference is missing too, but that
+	// FK is deferred while this one is immediate, so the missing parent wins.
+	_, err = catalog.AddStep(
+		ctx,
+		missing,
+		AddStepParams{
+			Name:     "orphan",
+			StatusID: missing,
+		})
+	if !errors.As(err, &notFoundErr) || notFoundErr.Entity != entityWorkflowDefinition {
+		t.Errorf("AddStep with missing definition: want NotFoundError on the definition, got %v", err)
+	}
+
+	// fk_action_definition_step: the state a concurrent delete of the step leaves
+	// AddAction's insert in.
+	orphanStepID := uuid.Must(uuid.NewV7())
+	orphan := ActionDefinition{
+		ID:                                 uuid.Must(uuid.NewV7()),
+		WorkflowDefinitionID:               missing,
+		StepDefinitionID:                   orphanStepID,
+		Name:                               "orphan",
+		TerminalWorkflowStatusDefinitionID: &missing,
+	}
+	err = insertAction(ctx, testPool, orphan)
+	if !errors.As(err, &notFoundErr) || notFoundErr.Entity != entityStep {
+		t.Errorf("insertAction with missing step: want NotFoundError on the step, got %v", err)
+	}
+
+	if notFoundErr != nil && notFoundErr.ID != orphanStepID {
+		t.Errorf("insertAction: NotFoundError should name the missing step %s, got %s", orphanStepID, notFoundErr.ID)
+	}
+}
+
 // TestReferencedDeleteMapping covers the delete side of the same FKs — the other
 // half of the two-sided constraints — using a definition whose statuses have
 // isolated roles so each FK can be provoked on its own.

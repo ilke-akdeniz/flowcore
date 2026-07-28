@@ -27,14 +27,20 @@ const (
 	// pointed outside its definition (CrossDefinitionError); on a delete it means
 	// the target is still referenced (ReferencedError). fkInitialStep's write side
 	// is unreachable (Create's stepExists pre-flight intercepts it), but its
-	// delete side (deleting the entry step) is live. The cascade-driver FKs to the
-	// parent definition are deliberately absent: their write side is intercepted
-	// by the existence checks in AddStatus/AddStep/AddAction, and their delete
-	// side cascades, so if one ever surfaced here it should fail loudly.
+	// delete side (deleting the entry step) is live.
 	fkStepStatus           = "fk_step_definition_status"
 	fkActionNextStep       = "fk_action_definition_next_step"
 	fkActionTerminalStatus = "fk_action_definition_terminal_status"
 	fkInitialStep          = "fk_workflow_definition_initial_step"
+
+	// The cascade-driver FKs to the parent row. A violation means the parent is
+	// gone, which the caller experiences as not-found; mapInsertErr turns them
+	// into NotFoundError. Only an insert can violate them — parent-membership
+	// columns are immutable, so no update ever writes them — and their delete side
+	// cascades rather than blocking.
+	fkStatusWorkflow = "fk_workflow_status_definition_workflow"
+	fkStepWorkflow   = "fk_step_definition_workflow"
+	fkActionStep     = "fk_action_definition_step"
 )
 
 // SQLSTATE codes we map. Kept as local constants to avoid a dependency on a
@@ -73,6 +79,37 @@ func mapWriteErr(err error, name string) error {
 	}
 
 	return err
+}
+
+// mapInsertErr maps a database error from an insert path to the domain taxonomy.
+// It is a third operation intent alongside mapWriteErr and mapDeleteErr, on the
+// same reasoning that split those two: an insert is the only operation that can
+// violate a cascade-driver foreign key, since parent-membership columns are
+// immutable and no update statement writes them. Such a violation means the
+// parent row does not exist, so the wrapper carries the parent's entity and id —
+// the raw error names the referencing table, not the missing parent, which is
+// the same gap that makes mapDeleteErr take an entity and id.
+//
+// Everything else an insert can violate is intent-independent and delegates to
+// mapWriteErr, including the fail-loud fallback for an unrecognized constraint.
+func mapInsertErr(err error, name string, parentEntity string, parentID uuid.UUID) error {
+	if err == nil {
+		return nil
+	}
+
+	pg := asPgError(err)
+	if pg == nil {
+		return err
+	}
+
+	if pg.Code == sqlstateForeignKeyViolation {
+		switch pg.ConstraintName {
+		case fkStatusWorkflow, fkStepWorkflow, fkActionStep:
+			return &NotFoundError{Entity: parentEntity, ID: parentID}
+		}
+	}
+
+	return mapWriteErr(err, name)
 }
 
 // mapDeleteErr maps a database error from a Delete path to the domain taxonomy.

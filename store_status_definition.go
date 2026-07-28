@@ -15,13 +15,17 @@ func rowToStatus(row pgx.CollectableRow) (WorkflowStatusDefinition, error) {
 	return status, err
 }
 
+// insertStatus writes a status. A missing parent definition surfaces from the
+// parent foreign key as NotFoundError rather than from a pre-flight read, so a
+// definition deleted concurrently reads as not-found and not as an internal
+// defect.
 func insertStatus(ctx context.Context, q querier, status WorkflowStatusDefinition) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.workflow_status_definition (id, workflow_definition_id, name)
 		 values ($1, $2, $3)`,
 		status.ID, status.WorkflowDefinitionID, status.Name)
 
-	return mapWriteErr(err, status.Name)
+	return mapInsertErr(err, status.Name, entityWorkflowDefinition, status.WorkflowDefinitionID)
 }
 
 func listStatusesByDefinition(ctx context.Context, q querier, definitionID uuid.UUID) ([]WorkflowStatusDefinition, error) {

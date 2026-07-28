@@ -16,6 +16,10 @@ func rowToAction(row pgx.CollectableRow) (ActionDefinition, error) {
 	return action, err
 }
 
+// insertAction writes an action. A missing parent step surfaces from the parent
+// foreign key as NotFoundError, for the reason given on insertStatus — which is
+// what makes AddAction's read of that step safe to race: if the step is deleted
+// between the read and this insert, the caller still gets not-found.
 func insertAction(ctx context.Context, q querier, action ActionDefinition) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.action_definition
@@ -25,7 +29,7 @@ func insertAction(ctx context.Context, q querier, action ActionDefinition) error
 		action.ID, action.WorkflowDefinitionID, action.StepDefinitionID, action.Name,
 		action.NextStepDefinitionID, action.TerminalWorkflowStatusDefinitionID)
 
-	return mapWriteErr(err, action.Name)
+	return mapInsertErr(err, action.Name, entityStep, action.StepDefinitionID)
 }
 
 // listActionsByDefinition returns every action in a definition, ordered so a

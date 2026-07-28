@@ -17,6 +17,10 @@ func rowToStep(row pgx.CollectableRow) (StepDefinition, error) {
 	return step, err
 }
 
+// insertStep writes a step. A missing parent definition surfaces from the parent
+// foreign key as NotFoundError, for the reason given on insertStatus. That check
+// is immediate while the status reference FK is deferred, so when both are
+// violated the missing parent wins — the more fundamental of the two.
 func insertStep(ctx context.Context, q querier, step StepDefinition) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.step_definition
@@ -24,7 +28,7 @@ func insertStep(ctx context.Context, q querier, step StepDefinition) error {
 		 values ($1, $2, $3, $4, $5)`,
 		step.ID, step.WorkflowDefinitionID, step.WorkflowStatusDefinitionID, step.AssigneeID, step.Name)
 
-	return mapWriteErr(err, step.Name)
+	return mapInsertErr(err, step.Name, entityWorkflowDefinition, step.WorkflowDefinitionID)
 }
 
 func getStepRow(ctx context.Context, q querier, id uuid.UUID) (StepDefinition, error) {

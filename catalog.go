@@ -131,13 +131,11 @@ func (c *Catalog) DeleteWorkflowDefinition(ctx context.Context, id uuid.UUID) er
 }
 
 // AddStatus adds a status to a definition. The definition must exist
-// (NotFoundError otherwise): checked before the insert so a missing parent reads
-// as not-found, not the cascade-driver FK's generic violation.
+// (NotFoundError otherwise), enforced by the parent foreign key at insert rather
+// than by a pre-flight read: a read cannot establish that the definition still
+// exists by the time the insert runs, so the constraint is the only check that
+// actually holds.
 func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID, p AddStatusParams) (WorkflowStatusDefinition, error) {
-	if _, err := getWorkflowDefinitionRow(ctx, c.pool, workflowDefinitionID); err != nil {
-		return WorkflowStatusDefinition{}, err
-	}
-
 	id, err := uuid.NewV7()
 	if err != nil {
 		return WorkflowStatusDefinition{}, err
@@ -165,13 +163,9 @@ func (c *Catalog) DeleteStatus(ctx context.Context, statusID uuid.UUID) error {
 }
 
 // AddStep adds a step to a definition. The definition must exist (NotFoundError
-// otherwise), checked as in AddStatus. The returned step has an empty, non-nil
+// otherwise), enforced as in AddStatus. The returned step has an empty, non-nil
 // Actions slice: it is loaded and has no actions yet.
 func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p AddStepParams) (StepDefinition, error) {
-	if _, err := getWorkflowDefinitionRow(ctx, c.pool, workflowDefinitionID); err != nil {
-		return StepDefinition{}, err
-	}
-
 	id, err := uuid.NewV7()
 	if err != nil {
 		return StepDefinition{}, err
@@ -227,8 +221,14 @@ func (c *Catalog) DeleteStep(ctx context.Context, stepID uuid.UUID) error {
 }
 
 // AddAction adds an action to a step. Exactly one of NextStepID / TerminalStatusID
-// must be set. The step must exist (NotFoundError otherwise); its definition is
-// looked up so the action carries the same workflow_definition_id.
+// must be set. The step must exist (NotFoundError otherwise).
+//
+// Unlike AddStatus and AddStep, this reads its parent step first — not as an
+// existence check, but because the action carries the step's
+// workflow_definition_id and there is nowhere else to get it. The read is
+// therefore permanent. It is safe to race: if the step is deleted between the
+// read and the insert, the parent foreign key produces the same NotFoundError
+// the read would have.
 func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p AddActionParams) (ActionDefinition, error) {
 	step, err := getStepRow(ctx, c.pool, stepDefinitionID)
 	if err != nil {

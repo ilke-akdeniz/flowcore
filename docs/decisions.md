@@ -581,3 +581,61 @@ This is documented on the method rather than left for a reader to infer.
 Not-found on an update now arrives as `pgx.ErrNoRows` rather than a zero `RowsAffected`, so the two paths a maintainer must recognize are the scan error and the constraint error, in that order.
 This extends decision 12's reasoning to the write paths without superseding it; decision 12 still governs `Get`.
 It does not address the check-then-insert race in `AddStatus`/`AddStep`/`AddAction`, where a concurrent delete of the parent turns a benign not-found into `UnmappedConstraintError` — a separate finding, still open, and one `RETURNING` cannot fix.
+That finding is settled in decision 20.
+
+---
+
+## 20. Cascade-driver FKs mapped on the insert path; decision 17's pre-checks retired
+
+**Context.**
+Decision 17 added pre-flight existence checks to `AddStatus`/`AddStep`/`AddAction` and, separately, made the mapper fail loud on any constraint it does not explicitly recognize.
+It left the three cascade-driver FKs out of the mapper's table on the stated grounds that the pre-checks intercepted their write side, so one surfacing there would indicate a library defect.
+That premise holds only in the absence of concurrency.
+The check and the insert are separate round-trips, so the parent can be deleted in between.
+A probe driving the real `Catalog` against a concurrent delete of the definition hit `UnmappedConstraintError` in **51 of 400 attempts** — an ordinary "someone deleted it" reported as an internal defect, and not a narrow window.
+
+**Options.**
+Accept and document.
+Map the three cascade-driver FKs to `NotFoundError` on the insert path and retire the now-redundant pre-checks.
+Resolve the parent inside the insert with `INSERT … SELECT`, so a missing parent yields zero rows instead of a violation.
+Both of the above.
+Wrap check and insert in a transaction taking `SELECT … FOR SHARE` on the parent.
+Map the FKs but keep the pre-checks.
+
+**Decision.**
+Map the three cascade-driver FKs — `fk_workflow_status_definition_workflow`, `fk_step_definition_workflow`, `fk_action_definition_step` — to `NotFoundError`, through a new `mapInsertErr` wrapper carrying the parent's entity and id.
+Drop the pre-flight reads in `AddStatus` and `AddStep`.
+Keep `AddAction`'s read.
+
+**Why.**
+`mapWriteErr` cannot produce the error this needs: `NotFoundError` carries an id, and the raw violation names the referencing table, not the missing parent.
+That is the same gap that already makes `mapDeleteErr` take an entity and id, so the shape is precedented rather than novel.
+A third wrapper is justified on decision 13's own reasoning — intent wrappers over an op argument, so a call site cannot pass the wrong intent — and the intent boundary here is real, not arbitrary: parent-membership columns are immutable, so no update statement writes them, and a cascade-driver FK can therefore only ever be violated by an insert.
+
+`INSERT … SELECT` was the tempting option and was rejected on inspection.
+The sub-select takes no row lock, so a delete committing between it and the referential-integrity trigger's `FOR KEY SHARE` still produces the violation.
+It shrinks the window from a network round-trip to intra-statement — making a wrong error rarer without making it right, which is the worst of the available outcomes.
+A locking transaction would close the window deterministically, but `SELECT … FOR SHARE` is the concurrency mechanism `CLAUDE.md` defers to the completion path, and it would add `Begin`/`Commit` to three more sites, the property decision 19 had just kept intact.
+Keeping the pre-checks alongside the mapping was rejected as pure cost: once the constraint produces the identical `NotFoundError`, the read buys nothing and spends a round-trip on every call.
+
+This does not weaken decision 17's fail-loud principle, which stands.
+The fallback still fires for any constraint not explicitly recognized.
+Three constraints move from unknown to known because a probe established exactly what they mean — the opposite of the guessing decision 17 banned.
+
+**Consequence.**
+This supersedes the first half of decision 17 — the pre-flight existence checks — and leaves its second half, the `UnmappedConstraintError` fallback, unchanged and still load-bearing.
+
+The three Add methods are deliberately **no longer uniform**, and the asymmetry is the point rather than an oversight.
+`AddStatus` and `AddStep` performed a pure existence check and now perform none, relying on the constraint.
+`AddAction` keeps its read permanently, because that read is a data dependency, not a check: the action carries its step's `workflow_definition_id` and there is nowhere else to obtain it.
+Its race is nonetheless closed, since the insert now yields the same `NotFoundError` the read would have.
+
+Two behaviours changed observably.
+`AddStatus` with a missing definition and an over-long name now returns `InvalidNameError` rather than `NotFoundError`, because CHECK constraints are evaluated before FK triggers; either is defensible and this records which one was chosen.
+When an insert violates both an immediate parent FK and a deferred reference FK, the immediate one surfaces — verified by probe — so a missing parent outranks a cross-definition reference, which is the correct precedence.
+
+A probe also established that a statement can report a non-zero `RowsAffected` and still fail, when a deferred constraint fires at the implicit commit.
+Any `RowsAffected` test must therefore come after the error check, never before.
+
+The existing not-found matrix still passes but now covers the mapper instead of the pre-checks, so its coverage became incidental; `TestCascadeDriverFKMapsToNotFound` states it explicitly, provoking the action case at the store because no public call can reach it deterministically.
+Re-running the race probe against the change returned zero `UnmappedConstraintError` across 400 attempts, with the losers reporting `NotFoundError`.
