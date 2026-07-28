@@ -63,24 +63,24 @@ func (c *Catalog) Create(ctx context.Context, definition WorkflowDefinition) (Wo
 	}
 
 	for _, status := range definition.Statuses {
-		if err := insertStatus(ctx, tx, status); err != nil {
+		if err := insertStatusDefinition(ctx, tx, status); err != nil {
 			return WorkflowDefinition{}, err
 		}
 	}
 
 	for _, step := range definition.Steps {
-		if err := insertStep(ctx, tx, step); err != nil {
+		if err := insertStepDefinition(ctx, tx, step); err != nil {
 			return WorkflowDefinition{}, err
 		}
 
 		for _, action := range step.Actions {
-			if err := insertAction(ctx, tx, action); err != nil {
+			if err := insertActionDefinition(ctx, tx, action); err != nil {
 				return WorkflowDefinition{}, err
 			}
 		}
 	}
 
-	if err := setInitialStep(ctx, tx, definition.ID, *definition.InitialStepDefinitionID); err != nil {
+	if err := setInitialStepDefinition(ctx, tx, definition.ID, *definition.InitialStepDefinitionID); err != nil {
 		return WorkflowDefinition{}, err
 	}
 
@@ -142,7 +142,7 @@ func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID,
 	}
 
 	status := WorkflowStatusDefinition{ID: id, WorkflowDefinitionID: workflowDefinitionID, Name: p.Name}
-	if err := insertStatus(ctx, c.pool, status); err != nil {
+	if err := insertStatusDefinition(ctx, c.pool, status); err != nil {
 		return WorkflowStatusDefinition{}, err
 	}
 
@@ -153,13 +153,13 @@ func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID,
 // The write and the read-back are a single statement, so the returned value is
 // this call's own write even under a concurrent update.
 func (c *Catalog) UpdateStatus(ctx context.Context, statusID uuid.UUID, p UpdateStatusParams) (WorkflowStatusDefinition, error) {
-	return updateStatus(ctx, c.pool, statusID, p)
+	return updateStatusDefinition(ctx, c.pool, statusID, p)
 }
 
 // DeleteStatus removes a status. Returns ReferencedError if a step uses it or an
 // action ends in it, NotFoundError if no such status.
 func (c *Catalog) DeleteStatus(ctx context.Context, statusID uuid.UUID) error {
-	return deleteStatus(ctx, c.pool, statusID)
+	return deleteStatusDefinition(ctx, c.pool, statusID)
 }
 
 // AddStep adds a step to a definition. The definition must exist (NotFoundError
@@ -178,7 +178,7 @@ func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p
 		AssigneeID:                 p.AssigneeID,
 		Name:                       p.Name,
 	}
-	if err := insertStep(ctx, c.pool, step); err != nil {
+	if err := insertStepDefinition(ctx, c.pool, step); err != nil {
 		return StepDefinition{}, err
 	}
 
@@ -198,12 +198,12 @@ func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p
 // since this method never writes actions, and an action set read a moment later
 // is indistinguishable from one changed a moment after this call returned.
 func (c *Catalog) UpdateStep(ctx context.Context, stepID uuid.UUID, p UpdateStepParams) (StepDefinition, error) {
-	step, err := updateStep(ctx, c.pool, stepID, p)
+	step, err := updateStepDefinition(ctx, c.pool, stepID, p)
 	if err != nil {
 		return StepDefinition{}, err
 	}
 
-	actions, err := listActionsByStep(ctx, c.pool, stepID)
+	actions, err := listActionDefinitionsByStepDefinition(ctx, c.pool, stepID)
 	if err != nil {
 		return StepDefinition{}, err
 	}
@@ -217,7 +217,7 @@ func (c *Catalog) UpdateStep(ctx context.Context, stepID uuid.UUID, p UpdateStep
 // if another action routes to it or it is the entry step, NotFoundError if no
 // such step.
 func (c *Catalog) DeleteStep(ctx context.Context, stepID uuid.UUID) error {
-	return deleteStep(ctx, c.pool, stepID)
+	return deleteStepDefinition(ctx, c.pool, stepID)
 }
 
 // AddAction adds an action to a step. Exactly one of NextStepID / TerminalStatusID
@@ -230,7 +230,7 @@ func (c *Catalog) DeleteStep(ctx context.Context, stepID uuid.UUID) error {
 // read and the insert, the parent foreign key produces the same NotFoundError
 // the read would have.
 func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p AddActionParams) (ActionDefinition, error) {
-	step, err := getStepRow(ctx, c.pool, stepDefinitionID)
+	step, err := getStepDefinitionRow(ctx, c.pool, stepDefinitionID)
 	if err != nil {
 		return ActionDefinition{}, err
 	}
@@ -248,7 +248,7 @@ func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p A
 		NextStepDefinitionID:               p.NextStepID,
 		TerminalWorkflowStatusDefinitionID: p.TerminalStatusID,
 	}
-	if err := insertAction(ctx, c.pool, action); err != nil {
+	if err := insertActionDefinition(ctx, c.pool, action); err != nil {
 		return ActionDefinition{}, err
 	}
 
@@ -259,13 +259,13 @@ func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p A
 // The exactly-one next-step / terminal-status rule is enforced. As with
 // UpdateStatus, the write and the read-back are a single statement.
 func (c *Catalog) UpdateAction(ctx context.Context, actionID uuid.UUID, p UpdateActionParams) (ActionDefinition, error) {
-	return updateAction(ctx, c.pool, actionID, p)
+	return updateActionDefinition(ctx, c.pool, actionID, p)
 }
 
 // DeleteAction removes an action. Nothing references an action, so this only
 // fails with NotFoundError if no such action.
 func (c *Catalog) DeleteAction(ctx context.Context, actionID uuid.UUID) error {
-	return deleteAction(ctx, c.pool, actionID)
+	return deleteActionDefinition(ctx, c.pool, actionID)
 }
 
 // readDefinition assembles the deep tree from four queries on q. Shared by Get
@@ -277,17 +277,17 @@ func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefin
 		return WorkflowDefinition{}, err
 	}
 
-	statuses, err := listStatusesByDefinition(ctx, q, id)
+	statuses, err := listStatusDefinitionsByWorkflowDefinition(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
 
-	steps, err := listStepsByDefinition(ctx, q, id)
+	steps, err := listStepDefinitionsByWorkflowDefinition(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}
 
-	actions, err := listActionsByDefinition(ctx, q, id)
+	actions, err := listActionDefinitionsByWorkflowDefinition(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err
 	}

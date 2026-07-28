@@ -9,8 +9,8 @@ import (
 )
 
 // insertWorkflowDefinition writes the root row with a null entry step; the entry
-// step is stamped by setInitialStep once the steps exist, inside the same
-// aggregate transaction.
+// step is stamped by setInitialStepDefinition once the steps exist, inside the
+// same aggregate transaction.
 func insertWorkflowDefinition(ctx context.Context, q querier, id uuid.UUID, name string) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.workflow_definition (id, name) values ($1, $2)`,
@@ -19,10 +19,10 @@ func insertWorkflowDefinition(ctx context.Context, q querier, id uuid.UUID, name
 	return mapWriteErr(err, name)
 }
 
-// setInitialStep stamps the entry step. The step must belong to the same
-// definition (enforced by fk_workflow_definition_initial_step); a mismatch
+// setInitialStepDefinition stamps the entry step. The step must belong to the
+// same definition (enforced by fk_workflow_definition_initial_step); a mismatch
 // surfaces as CrossDefinitionError.
-func setInitialStep(ctx context.Context, q querier, definitionID, stepID uuid.UUID) error {
+func setInitialStepDefinition(ctx context.Context, q querier, definitionID, stepID uuid.UUID) error {
 	_, err := q.Exec(ctx,
 		`update flowcore.workflow_definition set initial_step_definition_id = $2 where id = $1`,
 		definitionID, stepID)

@@ -183,13 +183,13 @@ func TestCascadeDriverFKMapsToNotFound(t *testing.T) {
 		Name:                               "orphan",
 		TerminalWorkflowStatusDefinitionID: &missing,
 	}
-	err = insertAction(ctx, testPool, orphan)
+	err = insertActionDefinition(ctx, testPool, orphan)
 	if !errors.As(err, &notFoundErr) || notFoundErr.Entity != entityStep {
-		t.Errorf("insertAction with missing step: want NotFoundError on the step, got %v", err)
+		t.Errorf("insertActionDefinition with missing step: want NotFoundError on the step, got %v", err)
 	}
 
 	if notFoundErr != nil && notFoundErr.ID != orphanStepID {
-		t.Errorf("insertAction: NotFoundError should name the missing step %s, got %s", orphanStepID, notFoundErr.ID)
+		t.Errorf("insertActionDefinition: NotFoundError should name the missing step %s, got %s", orphanStepID, notFoundErr.ID)
 	}
 }
 

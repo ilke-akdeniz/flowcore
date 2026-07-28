@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func rowToAction(row pgx.CollectableRow) (ActionDefinition, error) {
+func rowToActionDefinition(row pgx.CollectableRow) (ActionDefinition, error) {
 	var action ActionDefinition
 	err := row.Scan(&action.ID, &action.WorkflowDefinitionID, &action.StepDefinitionID, &action.Name,
 		&action.NextStepDefinitionID, &action.TerminalWorkflowStatusDefinitionID)
@@ -16,11 +16,12 @@ func rowToAction(row pgx.CollectableRow) (ActionDefinition, error) {
 	return action, err
 }
 
-// insertAction writes an action. A missing parent step surfaces from the parent
-// foreign key as NotFoundError, for the reason given on insertStatus — which is
-// what makes AddAction's read of that step safe to race: if the step is deleted
-// between the read and this insert, the caller still gets not-found.
-func insertAction(ctx context.Context, q querier, action ActionDefinition) error {
+// insertActionDefinition writes an action. A missing parent step surfaces from
+// the parent foreign key as NotFoundError, for the reason given on
+// insertStatusDefinition — which is what makes AddAction's read of that step
+// safe to race: if the step is deleted between the read and this insert, the
+// caller still gets not-found.
+func insertActionDefinition(ctx context.Context, q querier, action ActionDefinition) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.action_definition
 		 (id, workflow_definition_id, step_definition_id, name,
@@ -32,10 +33,11 @@ func insertAction(ctx context.Context, q querier, action ActionDefinition) error
 	return mapInsertErr(err, action.Name, entityStep, action.StepDefinitionID)
 }
 
-// listActionsByDefinition returns every action in a definition, ordered so a
-// deep read can group them under their steps. The action table carries
-// workflow_definition_id (denormalized), so this needs no join.
-func listActionsByDefinition(ctx context.Context, q querier, definitionID uuid.UUID) ([]ActionDefinition, error) {
+// listActionDefinitionsByWorkflowDefinition returns every action in a
+// definition, ordered so a deep read can group them under their steps. The
+// action table carries workflow_definition_id (denormalized), so this needs no
+// join.
+func listActionDefinitionsByWorkflowDefinition(ctx context.Context, q querier, definitionID uuid.UUID) ([]ActionDefinition, error) {
 	rows, err := q.Query(ctx,
 		`select id, workflow_definition_id, step_definition_id, name,
 		        next_step_definition_id, terminal_workflow_status_definition_id
@@ -46,10 +48,10 @@ func listActionsByDefinition(ctx context.Context, q querier, definitionID uuid.U
 		return nil, err
 	}
 
-	return collectActions(rows)
+	return collectActionDefinitions(rows)
 }
 
-func listActionsByStep(ctx context.Context, q querier, stepID uuid.UUID) ([]ActionDefinition, error) {
+func listActionDefinitionsByStepDefinition(ctx context.Context, q querier, stepID uuid.UUID) ([]ActionDefinition, error) {
 	rows, err := q.Query(ctx,
 		`select id, workflow_definition_id, step_definition_id, name,
 		        next_step_definition_id, terminal_workflow_status_definition_id
@@ -60,11 +62,11 @@ func listActionsByStep(ctx context.Context, q querier, stepID uuid.UUID) ([]Acti
 		return nil, err
 	}
 
-	return collectActions(rows)
+	return collectActionDefinitions(rows)
 }
 
-func collectActions(rows pgx.Rows) ([]ActionDefinition, error) {
-	actions, err := pgx.CollectRows(rows, rowToAction)
+func collectActionDefinitions(rows pgx.Rows) ([]ActionDefinition, error) {
+	actions, err := pgx.CollectRows(rows, rowToActionDefinition)
 	if err != nil {
 		return nil, err
 	}
@@ -76,12 +78,13 @@ func collectActions(rows pgx.Rows) ([]ActionDefinition, error) {
 	return actions, nil
 }
 
-// updateAction replaces the action's mutable columns and returns the stored row
-// in one statement, for the reason given on updateStatus. Its routing columns
-// sit behind deferred foreign keys, so a cross-definition reference is rejected
-// at the statement's implicit commit — after RETURNING has produced its row, but
-// still surfaced from this call, so mapWriteErr sees it as it always has.
-func updateAction(ctx context.Context, q querier, id uuid.UUID, p UpdateActionParams) (ActionDefinition, error) {
+// updateActionDefinition replaces the action's mutable columns and returns the
+// stored row in one statement, for the reason given on updateStatusDefinition.
+// Its routing columns sit behind deferred foreign keys, so a cross-definition
+// reference is rejected at the statement's implicit commit — after RETURNING has
+// produced its row, but still surfaced from this call, so mapWriteErr sees it as
+// it always has.
+func updateActionDefinition(ctx context.Context, q querier, id uuid.UUID, p UpdateActionParams) (ActionDefinition, error) {
 	var action ActionDefinition
 	err := q.QueryRow(ctx,
 		`update flowcore.action_definition
@@ -103,7 +106,7 @@ func updateAction(ctx context.Context, q querier, id uuid.UUID, p UpdateActionPa
 	return action, nil
 }
 
-func deleteAction(ctx context.Context, q querier, id uuid.UUID) error {
+func deleteActionDefinition(ctx context.Context, q querier, id uuid.UUID) error {
 	tag, err := q.Exec(ctx, `delete from flowcore.action_definition where id = $1`, id)
 	if err != nil {
 		return mapDeleteErr(err, entityAction, id)

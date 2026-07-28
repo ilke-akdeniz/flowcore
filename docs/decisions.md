@@ -639,3 +639,50 @@ Any `RowsAffected` test must therefore come after the error check, never before.
 
 The existing not-found matrix still passes but now covers the mapper instead of the pre-checks, so its coverage became incidental; `TestCascadeDriverFKMapsToNotFound` states it explicitly, provoking the action case at the store because no public call can reach it deterministically.
 Re-running the race probe against the change returned zero `UnmappedConstraintError` across 400 attempts, with the losers reporting `NotFoundError`.
+
+---
+
+## 21. Dedicated params structs with full-replace semantics
+
+**Context.**
+Recorded retroactively.
+The shape was settled while the Catalog was built and is stated as fact in `docs/system-design.md`, but the reasoning and the alternatives it beat were never written down, and the one sharp edge it carries lived only in a source comment in `params.go`.
+The question each mutating method has to answer is what the caller hands it: which columns are settable, how "don't change this" is expressed, and what a zero value means.
+
+**Options.**
+Pass the whole entity — `UpdateStep(ctx, step StepDefinition)` — and let the store work out what changed.
+Patch semantics: make every field a pointer, where nil means "leave this column alone".
+A dedicated params struct per operation, carrying only the settable columns, with every listed column always written.
+
+**Decision.**
+A dedicated params struct per operation.
+Update is a full replace of the columns the struct lists.
+Identity and parent-membership columns are absent from the struct entirely, and no params type carries children.
+
+**Why.**
+Passing the whole entity makes the type promise more than the operation delivers.
+`StepDefinition` carries `ID`, `WorkflowDefinitionID`, and `Actions`; an update honours none of them, so the method would have to silently ignore three fields a caller can set in good faith.
+A caller changing `WorkflowDefinitionID` would reasonably expect re-parenting, and a caller editing `Actions` would reasonably expect the actions to be written — neither happens.
+The params struct makes those cases unrepresentable rather than ignored, which is the difference between a contract enforced by the type and one enforced by documentation nobody reads at the call site.
+
+Patch semantics fail on a narrower but harder point: if nil means "leave unchanged", there is no way left to say "set this column to NULL".
+`assignee_id` is nullable and clearing it is a real operation — unassigning a step — so patch semantics would need a second channel to express it: a `**string`, a sentinel value, or a `ClearAssignee bool` beside every nullable field.
+Each of those is worse than the problem it solves.
+Full replace keeps one meaning per value: nil is NULL, always.
+
+**Consequence.**
+The sharp edge is that read-modify-write becomes the caller's obligation, and forgetting it is silent rather than loud.
+`UpdateStep` with `AssigneeID` left nil does not preserve the current assignee — it unassigns the step.
+A caller who meant only to rename a step, and who built the params from scratch, loses the assignment with no error.
+
+`ToUpdate()` on the read types exists for exactly this reason.
+It is not a convenience: it is the mechanism that makes full replace safe to use, pre-filling every settable column from current state so a caller changes one field and carries the rest forward untouched.
+Its absence from a read-modify-write path is the defect to look for in review.
+
+The failure is not uniform across the params types, which is worth knowing before trusting the pattern.
+`UpdateStepParams.AssigneeID` fails silently, as above.
+`UpdateActionParams` cannot: leaving both `NextStepID` and `TerminalStatusID` nil violates the XOR check and returns `InvalidActionError`, so the same mistake is caught by the schema.
+`UpdateStatusParams` carries only a non-pointer `Name`, which the length CHECK rejects when empty.
+`AssigneeID` is the only settable column in the definition-side API where a forgotten field destroys data quietly — a direct consequence of it being the only nullable one the library never interprets.
+
+Adding a settable column later means adding a field to one params struct, which is a compile-visible change at every construction site that uses a keyed literal.
