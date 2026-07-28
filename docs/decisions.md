@@ -412,7 +412,7 @@ Serial execution is a _designed_ correctness condition, not incidental: a shared
 If the suite ever spreads across packages, `go test ./...`'s cross-package concurrency needs `-p 1` or a shared lock.
 The existing pgx smoke test (which `t.Fatal`s) is deleted once real tests land, per its own TODO.
 
---- 
+---
 
 ## 15. Deferrable reference FKs, so whole-definition delete works
 
@@ -446,7 +446,7 @@ Create's Commit error must therefore route through mapWriteErr, and a Create-wit
 
 **Context.**
 Decision 13 built the error taxonomy as typed errors wrapping sentinels, every one a mapping of a DB rejection.
-Create's entry-step validation (decision 6's consequence) introduced errors that are checked *before* the database is touched — `ErrNoSteps` and `ErrInitialStepNotInTree` — which don't fit that shape.
+Create's entry-step validation (decision 6's consequence) introduced errors that are checked _before_ the database is touched — `ErrNoSteps` and `ErrInitialStepNotInTree` — which don't fit that shape.
 
 **Decision.**
 The error surface has two classes.
@@ -528,3 +528,56 @@ It is kept deliberately narrow (one letter, one qualifying shape) so it cannot b
 **Consequence.**
 Every future variable, struct field, and function parameter follows this rule; a short domain-concept name in a review is a defect to flag, unless it is a structural particle, a genuine single-dominant-parameter case, or a type-shadow case.
 This is recorded so the deviation reads as a deliberate, reasoned choice — not unfamiliarity with Go idiom.
+
+---
+
+## 19. Update read-back via `UPDATE … RETURNING`, not a transaction
+
+**Context.**
+Surfaced during an architecture review of the file and type organization.
+Decision 12 wrapped `Get`'s four reads in a repeatable-read transaction because separate round-trips on the pool can straddle a concurrent edit and return a mixed-vintage result.
+`UpdateStatus`, `UpdateStep`, and `UpdateAction` each made that same mistake and were never asked the question: they issued the write, then re-read the row through a separate helper on the pool.
+A probe confirmed the tear is real, not theoretical — a caller writing `name='MINE'` gets back `'INTERLOPER'` when another writer lands between the two statements.
+`UpdateAction` was folded in because it is structurally identical to `UpdateStatus`; fixing two of three identical shapes would have been arbitrary.
+
+**Options.**
+Accept the tear and document it as the contract.
+Wrap each update in a read-committed transaction.
+Wrap each update in a repeatable-read transaction, mirroring `Get`.
+Collapse the write and the read-back into one `UPDATE … RETURNING` statement, with no transaction.
+Drop the read-back entirely and have the update methods return only `error`.
+Serializable isolation, or `SELECT … FOR UPDATE`.
+
+**Decision.**
+`UPDATE … RETURNING`, one statement per update, no transaction.
+The store's three update helpers now return `(Entity, error)` instead of `error`, and Catalog returns what they hand back.
+`getStatusRow` and `getActionRow` are deleted, having lost their only callers; `getStepRow` survives, since `AddAction` still reads a step to find its definition.
+
+**Why.**
+Mirroring `Get` is a trap, and it is the first thing anyone reaches for.
+`Get`'s wrapper is repeatable read _and_ `AccessMode: ReadOnly` — a read-only snapshot cannot fail to serialize.
+Repeatable read on a _write_ path is a different mechanism entirely: a probe confirmed two concurrent updates of one row give the loser `40001 could not serialize access due to concurrent update`, a caller-visible error class with no member in the taxonomy and no retry logic anywhere in the library.
+That is precisely the concurrency work `CLAUDE.md` defers to the completion path, arriving through the back door.
+Read-committed avoids `40001` but buys less than it costs: it still adds `Begin`/`Commit` to three more sites, and it does not freeze `UpdateStep`'s action read anyway, since each statement re-snapshots.
+
+`RETURNING` needs no transaction at all, which is what makes it the smaller change rather than merely a different one.
+`Begin`/`Commit` appear at exactly two sites today, and `docs/system-design.md` records transaction control as living in one place; this keeps that property untouched instead of contradicting it.
+It also removes code rather than adding a layer: every update helper had a `RowsAffected() == 0` not-found check, and Catalog then re-read through a helper with its own `pgx.ErrNoRows` not-found check — two mechanisms for one operation, now one.
+
+Three probes cleared the risks that could have killed it.
+A deferred foreign-key violation still surfaces under `RETURNING` with a byte-identical `pgconn.PgError` (`23503`, same constraint, same table), so `mapWriteErr` is unchanged even though the check now fires after the returned row has been produced.
+An immediate unique violation surfaces the same way.
+A non-matching id yields `pgx.ErrNoRows`, giving the not-found path for free.
+
+Decision 2's "no `RETURNING` dance" is not precedent against this.
+That line was about _generating ids_ — rejecting a round-trip to learn ids the application can assign itself — and says nothing about reading back a row just written.
+The two are orthogonal, and this is noted here because a reader of decision 2 would otherwise reasonably think the question was already settled.
+
+**Consequence.**
+`UpdateStep` is not fully closed and is not meant to be: its own columns come from the update statement, but its actions are a second query, so a concurrent `AddAction` can appear in the returned slice.
+Accepted deliberately — the method never writes actions, and an action set read a moment later is indistinguishable from one changed a moment after the call returned.
+This is documented on the method rather than left for a reader to infer.
+
+Not-found on an update now arrives as `pgx.ErrNoRows` rather than a zero `RowsAffected`, so the two paths a maintainer must recognize are the scan error and the constraint error, in that order.
+This extends decision 12's reasoning to the write paths without superseding it; decision 12 still governs `Get`.
+It does not address the check-then-insert race in `AddStatus`/`AddStep`/`AddAction`, where a concurrent delete of the parent turns a benign not-found into `UnmappedConstraintError` — a separate finding, still open, and one `RETURNING` cannot fix.

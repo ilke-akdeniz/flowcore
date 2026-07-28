@@ -152,12 +152,10 @@ func (c *Catalog) AddStatus(ctx context.Context, workflowDefinitionID uuid.UUID,
 }
 
 // UpdateStatus replaces a status's mutable columns and returns the stored row.
+// The write and the read-back are a single statement, so the returned value is
+// this call's own write even under a concurrent update.
 func (c *Catalog) UpdateStatus(ctx context.Context, statusID uuid.UUID, p UpdateStatusParams) (WorkflowStatusDefinition, error) {
-	if err := updateStatus(ctx, c.pool, statusID, p); err != nil {
-		return WorkflowStatusDefinition{}, err
-	}
-
-	return getStatusRow(ctx, c.pool, statusID)
+	return updateStatus(ctx, c.pool, statusID, p)
 }
 
 // DeleteStatus removes a status. Returns ReferencedError if a step uses it or an
@@ -199,12 +197,14 @@ func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p
 // returns the stored step with its actions re-fetched and populated. It does not
 // read or change the step's actions as an input: actions are managed through
 // AddAction/UpdateAction/DeleteAction.
+//
+// The step's own columns come back from the update statement itself, so they are
+// always this call's own write. The actions are a second query, so a concurrent
+// AddAction or DeleteAction can be reflected in the returned slice — deliberate,
+// since this method never writes actions, and an action set read a moment later
+// is indistinguishable from one changed a moment after this call returned.
 func (c *Catalog) UpdateStep(ctx context.Context, stepID uuid.UUID, p UpdateStepParams) (StepDefinition, error) {
-	if err := updateStep(ctx, c.pool, stepID, p); err != nil {
-		return StepDefinition{}, err
-	}
-
-	step, err := getStepRow(ctx, c.pool, stepID)
+	step, err := updateStep(ctx, c.pool, stepID, p)
 	if err != nil {
 		return StepDefinition{}, err
 	}
@@ -256,13 +256,10 @@ func (c *Catalog) AddAction(ctx context.Context, stepDefinitionID uuid.UUID, p A
 }
 
 // UpdateAction replaces an action's mutable columns and returns the stored row.
-// The exactly-one next-step / terminal-status rule is enforced.
+// The exactly-one next-step / terminal-status rule is enforced. As with
+// UpdateStatus, the write and the read-back are a single statement.
 func (c *Catalog) UpdateAction(ctx context.Context, actionID uuid.UUID, p UpdateActionParams) (ActionDefinition, error) {
-	if err := updateAction(ctx, c.pool, actionID, p); err != nil {
-		return ActionDefinition{}, err
-	}
-
-	return getActionRow(ctx, c.pool, actionID)
+	return updateAction(ctx, c.pool, actionID, p)
 }
 
 // DeleteAction removes an action. Nothing references an action, so this only

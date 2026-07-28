@@ -28,25 +28,6 @@ func insertAction(ctx context.Context, q querier, action ActionDefinition) error
 	return mapWriteErr(err, action.Name)
 }
 
-func getActionRow(ctx context.Context, q querier, id uuid.UUID) (ActionDefinition, error) {
-	var action ActionDefinition
-	err := q.QueryRow(ctx,
-		`select id, workflow_definition_id, step_definition_id, name,
-		        next_step_definition_id, terminal_workflow_status_definition_id
-		 from flowcore.action_definition where id = $1`,
-		id).Scan(&action.ID, &action.WorkflowDefinitionID, &action.StepDefinitionID, &action.Name,
-		&action.NextStepDefinitionID, &action.TerminalWorkflowStatusDefinitionID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ActionDefinition{}, &NotFoundError{Entity: entityAction, ID: id}
-	}
-
-	if err != nil {
-		return ActionDefinition{}, err
-	}
-
-	return action, nil
-}
-
 // listActionsByDefinition returns every action in a definition, ordered so a
 // deep read can group them under their steps. The action table carries
 // workflow_definition_id (denormalized), so this needs no join.
@@ -91,21 +72,31 @@ func collectActions(rows pgx.Rows) ([]ActionDefinition, error) {
 	return actions, nil
 }
 
-func updateAction(ctx context.Context, q querier, id uuid.UUID, p UpdateActionParams) error {
-	tag, err := q.Exec(ctx,
+// updateAction replaces the action's mutable columns and returns the stored row
+// in one statement, for the reason given on updateStatus. Its routing columns
+// sit behind deferred foreign keys, so a cross-definition reference is rejected
+// at the statement's implicit commit — after RETURNING has produced its row, but
+// still surfaced from this call, so mapWriteErr sees it as it always has.
+func updateAction(ctx context.Context, q querier, id uuid.UUID, p UpdateActionParams) (ActionDefinition, error) {
+	var action ActionDefinition
+	err := q.QueryRow(ctx,
 		`update flowcore.action_definition
 		 set name = $2, next_step_definition_id = $3, terminal_workflow_status_definition_id = $4
-		 where id = $1`,
-		id, p.Name, p.NextStepID, p.TerminalStatusID)
+		 where id = $1
+		 returning id, workflow_definition_id, step_definition_id, name,
+		           next_step_definition_id, terminal_workflow_status_definition_id`,
+		id, p.Name, p.NextStepID, p.TerminalStatusID).Scan(
+		&action.ID, &action.WorkflowDefinitionID, &action.StepDefinitionID, &action.Name,
+		&action.NextStepDefinitionID, &action.TerminalWorkflowStatusDefinitionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ActionDefinition{}, &NotFoundError{Entity: entityAction, ID: id}
+	}
+
 	if err != nil {
-		return mapWriteErr(err, p.Name)
+		return ActionDefinition{}, mapWriteErr(err, p.Name)
 	}
 
-	if tag.RowsAffected() == 0 {
-		return &NotFoundError{Entity: entityAction, ID: id}
-	}
-
-	return nil
+	return action, nil
 }
 
 func deleteAction(ctx context.Context, q querier, id uuid.UUID) error {

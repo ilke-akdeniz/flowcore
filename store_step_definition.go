@@ -65,21 +65,27 @@ func listStepsByDefinition(ctx context.Context, q querier, definitionID uuid.UUI
 	return steps, nil
 }
 
-func updateStep(ctx context.Context, q querier, id uuid.UUID, p UpdateStepParams) error {
-	tag, err := q.Exec(ctx,
+// updateStep replaces the step's own mutable columns and returns the stored row
+// in one statement, for the reason given on updateStatus. Actions are not
+// touched and are left nil; the caller populates them.
+func updateStep(ctx context.Context, q querier, id uuid.UUID, p UpdateStepParams) (StepDefinition, error) {
+	var step StepDefinition
+	err := q.QueryRow(ctx,
 		`update flowcore.step_definition
 		 set name = $2, workflow_status_definition_id = $3, assignee_id = $4
-		 where id = $1`,
-		id, p.Name, p.StatusID, p.AssigneeID)
+		 where id = $1
+		 returning id, workflow_definition_id, workflow_status_definition_id, assignee_id, name`,
+		id, p.Name, p.StatusID, p.AssigneeID).Scan(
+		&step.ID, &step.WorkflowDefinitionID, &step.WorkflowStatusDefinitionID, &step.AssigneeID, &step.Name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return StepDefinition{}, &NotFoundError{Entity: entityStep, ID: id}
+	}
+
 	if err != nil {
-		return mapWriteErr(err, p.Name)
+		return StepDefinition{}, mapWriteErr(err, p.Name)
 	}
 
-	if tag.RowsAffected() == 0 {
-		return &NotFoundError{Entity: entityStep, ID: id}
-	}
-
-	return nil
+	return step, nil
 }
 
 func deleteStep(ctx context.Context, q querier, id uuid.UUID) error {

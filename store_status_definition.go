@@ -24,22 +24,6 @@ func insertStatus(ctx context.Context, q querier, status WorkflowStatusDefinitio
 	return mapWriteErr(err, status.Name)
 }
 
-func getStatusRow(ctx context.Context, q querier, id uuid.UUID) (WorkflowStatusDefinition, error) {
-	var status WorkflowStatusDefinition
-	err := q.QueryRow(ctx,
-		`select id, workflow_definition_id, name from flowcore.workflow_status_definition where id = $1`,
-		id).Scan(&status.ID, &status.WorkflowDefinitionID, &status.Name)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return WorkflowStatusDefinition{}, &NotFoundError{Entity: entityStatus, ID: id}
-	}
-
-	if err != nil {
-		return WorkflowStatusDefinition{}, err
-	}
-
-	return status, nil
-}
-
 func listStatusesByDefinition(ctx context.Context, q querier, definitionID uuid.UUID) ([]WorkflowStatusDefinition, error) {
 	rows, err := q.Query(ctx,
 		`select id, workflow_definition_id, name from flowcore.workflow_status_definition
@@ -61,19 +45,28 @@ func listStatusesByDefinition(ctx context.Context, q querier, definitionID uuid.
 	return statuses, nil
 }
 
-func updateStatus(ctx context.Context, q querier, id uuid.UUID, p UpdateStatusParams) error {
-	tag, err := q.Exec(ctx,
-		`update flowcore.workflow_status_definition set name = $2 where id = $1`,
-		id, p.Name)
+// updateStatus replaces the status's mutable columns and returns the stored row.
+// RETURNING makes the read-back part of the write itself, so the returned value
+// is always this statement's own write and never a concurrent caller's; a
+// separate select could observe another writer's row. Zero rows returned means
+// no such status, which is why not-found arrives as pgx.ErrNoRows here rather
+// than through a RowsAffected check.
+func updateStatus(ctx context.Context, q querier, id uuid.UUID, p UpdateStatusParams) (WorkflowStatusDefinition, error) {
+	var status WorkflowStatusDefinition
+	err := q.QueryRow(ctx,
+		`update flowcore.workflow_status_definition set name = $2
+		 where id = $1
+		 returning id, workflow_definition_id, name`,
+		id, p.Name).Scan(&status.ID, &status.WorkflowDefinitionID, &status.Name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkflowStatusDefinition{}, &NotFoundError{Entity: entityStatus, ID: id}
+	}
+
 	if err != nil {
-		return mapWriteErr(err, p.Name)
+		return WorkflowStatusDefinition{}, mapWriteErr(err, p.Name)
 	}
 
-	if tag.RowsAffected() == 0 {
-		return &NotFoundError{Entity: entityStatus, ID: id}
-	}
-
-	return nil
+	return status, nil
 }
 
 func deleteStatus(ctx context.Context, q querier, id uuid.UUID) error {

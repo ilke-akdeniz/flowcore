@@ -84,6 +84,59 @@ func TestCrossDefinitionMapping(t *testing.T) {
 	}
 }
 
+// TestCrossDefinitionMappingOnUpdate covers the same three FKs from the update
+// side. These reference FKs are DEFERRABLE INITIALLY DEFERRED, so their check
+// fires at the statement's implicit commit — which, since the update methods
+// read back via UPDATE ... RETURNING (decision 19), is after the returned row
+// has been produced. The point of this test is that the violation still reaches
+// mapWriteErr rather than being masked by a successfully scanned row.
+func TestCrossDefinitionMappingOnUpdate(t *testing.T) {
+	catalog := newCatalog(t)
+	ctx := context.Background()
+	definitionA, a := twoStepDefinition("A")
+	mustCreate(t, catalog, definitionA)
+	definitionB, b := twoStepDefinition("B")
+	mustCreate(t, catalog, definitionB)
+
+	// fk_step_definition_status: repointing B's step at A's status.
+	if _, err := catalog.UpdateStep(
+		ctx,
+		b.managerStep,
+		UpdateStepParams{
+			Name:     "Manager Review",
+			StatusID: a.status,
+		}); !errors.Is(err, ErrCrossDefinition) {
+		t.Errorf("cross-def step status on update: want ErrCrossDefinition, got %v", err)
+	}
+
+	action, err := catalog.AddAction(ctx, b.managerStep, AddActionParams{Name: "proceed", NextStepID: &b.directorStep})
+	if err != nil {
+		t.Fatalf("AddAction: %v", err)
+	}
+
+	// fk_action_definition_next_step: repointing B's action at A's step.
+	if _, err := catalog.UpdateAction(
+		ctx,
+		action.ID,
+		UpdateActionParams{
+			Name:       "proceed",
+			NextStepID: &a.directorStep,
+		}); !errors.Is(err, ErrCrossDefinition) {
+		t.Errorf("cross-def next step on update: want ErrCrossDefinition, got %v", err)
+	}
+
+	// fk_action_definition_terminal_status: repointing B's action at A's status.
+	if _, err := catalog.UpdateAction(
+		ctx,
+		action.ID,
+		UpdateActionParams{
+			Name:             "proceed",
+			TerminalStatusID: &a.status,
+		}); !errors.Is(err, ErrCrossDefinition) {
+		t.Errorf("cross-def terminal status on update: want ErrCrossDefinition, got %v", err)
+	}
+}
+
 // TestReferencedDeleteMapping covers the delete side of the same FKs — the other
 // half of the two-sided constraints — using a definition whose statuses have
 // isolated roles so each FK can be provoked on its own.
