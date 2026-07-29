@@ -192,12 +192,20 @@ func (c *Catalog) AddStep(ctx context.Context, workflowDefinitionID uuid.UUID, p
 // read or change the step's actions as an input: actions are managed through
 // AddAction/UpdateAction/DeleteAction.
 //
+// AssigneeID must be decided — SetTo, Clear, or inherited from ToUpdate. Leaving
+// it at its zero value returns FieldNotSetError before anything is written,
+// rather than quietly unassigning the step.
+//
 // The step's own columns come back from the update statement itself, so they are
 // always this call's own write. The actions are a second query, so a concurrent
 // AddAction or DeleteAction can be reflected in the returned slice — deliberate,
 // since this method never writes actions, and an action set read a moment later
 // is indistinguishable from one changed a moment after this call returned.
 func (c *Catalog) UpdateStep(ctx context.Context, stepID uuid.UUID, p UpdateStepParams) (StepDefinition, error) {
+	if err := p.validate(); err != nil {
+		return StepDefinition{}, err
+	}
+
 	step, err := updateStepDefinition(ctx, c.pool, stepID, p)
 	if err != nil {
 		return StepDefinition{}, err

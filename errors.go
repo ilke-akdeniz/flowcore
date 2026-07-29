@@ -47,6 +47,11 @@ var (
 	// ErrInitialStepNotInTree: an explicit InitialStepDefinitionID does not match
 	// any step in the definition's Steps.
 	ErrInitialStepNotInTree = errors.New("flowcore: initial step is not one of the definition's steps")
+
+	// ErrFieldNotSet is returned when a Nullable params field was left at its
+	// zero value instead of being decided with SetTo or Clear. See
+	// FieldNotSetError.
+	ErrFieldNotSet = errors.New("flowcore: params field not set")
 )
 
 // Entity labels carried on errors so a caller can name the offending kind.
@@ -139,3 +144,24 @@ func (e *UnmappedConstraintError) Error() string {
 	return fmt.Sprintf("flowcore: unmapped database constraint %q (SQLSTATE %s): %v", e.Constraint, e.Code, e.cause)
 }
 func (e *UnmappedConstraintError) Unwrap() []error { return []error{ErrUnmappedConstraint, e.cause} }
+
+// FieldNotSetError reports a Nullable params field the caller never decided.
+// Unlike the other pre-flight errors it carries a field name, because the type is
+// reusable and "which field" is genuine per-occurrence detail — a departure from
+// decision 16's field-less pre-flight sentinels, made deliberately. Wraps
+// ErrFieldNotSet.
+//
+// The message names ToUpdate on purpose. The quickest way to silence this error
+// is Clear, which destroys the stored value the error exists to protect, so the
+// error has to point at the remedy that preserves it.
+type FieldNotSetError struct {
+	Field string
+}
+
+func (e *FieldNotSetError) Error() string {
+	return fmt.Sprintf(
+		"flowcore: %s was not set; decide it with SetTo or Clear, or build the params "+
+			"with ToUpdate() to carry the stored value forward",
+		e.Field)
+}
+func (e *FieldNotSetError) Unwrap() error { return ErrFieldNotSet }

@@ -81,7 +81,7 @@ func updateStepDefinition(ctx context.Context, q querier, id uuid.UUID, p Update
 		 set name = $2, workflow_status_definition_id = $3, assignee_id = $4
 		 where id = $1
 		 returning id, workflow_definition_id, workflow_status_definition_id, assignee_id, name`,
-		id, p.Name, p.StatusID, p.AssigneeID).Scan(
+		id, p.Name, p.StatusID, p.AssigneeID.ptr()).Scan(
 		&step.ID, &step.WorkflowDefinitionID, &step.WorkflowStatusDefinitionID, &step.AssigneeID, &step.Name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StepDefinition{}, &NotFoundError{Entity: entityStep, ID: id}

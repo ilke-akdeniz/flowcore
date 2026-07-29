@@ -72,11 +72,21 @@ func (s WorkflowStatusDefinition) ToUpdate() UpdateStatusParams {
 // ToUpdate returns the update params for this step, pre-filled from its current
 // state. Note it does not carry actions: a step's actions are managed through
 // AddAction/UpdateAction/DeleteAction, never through UpdateStep.
+//
+// This is the safe way to build UpdateStepParams, not merely the convenient one.
+// Update is a full replace, so params assembled by hand overwrite every column
+// they list; starting from ToUpdate carries the stored assignee forward so that
+// changing a step's name cannot unassign it as a side effect.
 func (s StepDefinition) ToUpdate() UpdateStepParams {
+	assignee := Clear[string]()
+	if s.AssigneeID != nil {
+		assignee = SetTo(*s.AssigneeID)
+	}
+
 	return UpdateStepParams{
 		Name:       s.Name,
 		StatusID:   s.WorkflowStatusDefinitionID,
-		AssigneeID: s.AssigneeID,
+		AssigneeID: assignee,
 	}
 }
 

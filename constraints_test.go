@@ -103,8 +103,9 @@ func TestCrossDefinitionMappingOnUpdate(t *testing.T) {
 		ctx,
 		b.managerStep,
 		UpdateStepParams{
-			Name:     "Manager Review",
-			StatusID: a.status,
+			Name:       "Manager Review",
+			StatusID:   a.status,
+			AssigneeID: Clear[string](),
 		}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def step status on update: want ErrCrossDefinition, got %v", err)
 	}

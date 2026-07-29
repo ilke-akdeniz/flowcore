@@ -686,3 +686,66 @@ The failure is not uniform across the params types, which is worth knowing befor
 `AssigneeID` is the only settable column in the definition-side API where a forgotten field destroys data quietly — a direct consequence of it being the only nullable one the library never interprets.
 
 Adding a settable column later means adding a field to one params struct, which is a compile-visible change at every construction site that uses a keyed literal.
+
+---
+
+## 22. `Nullable[T]` on the one params field a constraint does not protect
+
+**Context.**
+Decision 21 recorded the sharp edge without fixing it: under full replace, a caller who builds `UpdateStepParams` by hand and never touches `AssigneeID` unassigns the step, silently.
+The open question was how a nullable settable column should be represented so that "I forgot this field" and "I meant to clear it" cannot be the same value.
+Full replace stays settled, so "unset means unchanged" was never on the table — that is patch semantics, which decision 21 rejected.
+
+An audit of all six params structs — thirteen settable fields — established the scope before any design work.
+Every field except one is already caught loudly when left at its zero value: `Name` by the 1–200 length CHECKs, `StatusID` by the composite foreign key, and the `NextStepID`/`TerminalStatusID` pair by the XOR CHECK.
+Exactly one field, `UpdateStepParams.AssigneeID`, fails silently and destructively.
+
+**Options.**
+Move nullable columns out of Update params entirely, giving each its own method (`AssignStep`).
+A three-state field type on every field, with unset as a validation error.
+A constructor taking every field, with the struct fields unexported.
+`ToUpdate()` as the only way to obtain a params value.
+An `exhaustruct`-style linter requiring every field at construction.
+A field mask.
+A three-state `Nullable[T]` on only the field the audit found unprotected.
+
+**Decision.**
+`Nullable[T]` — `SetTo(v)`, `Clear[T]()`, zero value unset — on `UpdateStepParams.AssigneeID` alone.
+`UpdateStep` rejects an undecided field with `FieldNotSetError` before touching the database.
+`AddStepParams.AssigneeID` stays `*string`.
+
+**Why.**
+The audit is the whole justification.
+Wrapping all thirteen fields would add ceremony to twelve that a CHECK or a foreign key already protects, to fix one that nothing protects.
+Moving the column out to `AssignStep` would have cost atomicity — renaming and reassigning a step in one call is possible today, and decision 19 deliberately kept `Begin`/`Commit` out of the update path, so two calls could not be made atomic afterwards.
+`Nullable` keeps one struct and one call while making the destructive omission impossible to express.
+
+`assignee_id` is unprotected for a reason worth naming, because it predicts where this recurs.
+It is the only column that is nullable, settable, and carries no foreign key, CHECK, or format rule — precisely because principle 1 forbids the library from interpreting it.
+The design principle that makes it opaque is what strips away the backstop every other field enjoys.
+The type is nonetheless justified by `AssigneeID` alone and by nothing else; `completed_by` and the subject version token do not exist yet, and if they later want the same shape they will reuse this type rather than having motivated it.
+
+The rejected options failed on specific, recorded grounds.
+A linter is worthless at a library boundary: it protects only call sites that opt into it, and FlowCore's call sites are in other people's codebases.
+A field mask leaves unlisted fields unchanged, which is patch semantics wearing a different hat, and it is stringly typed.
+A constructor cannot absorb a new settable column without a breaking signature change.
+`ToUpdate()`-only construction forces a read before every update and trades clobber-with-nil for clobber-with-stale — which is worth stating plainly: no params shape fixes a lost update, only a version column does, and that stays deferred.
+
+**Consequence.**
+There are now two representations of nullability in the public API: `*T` on read types and Add params, `Nullable[T]` on Update params.
+A caller who hand-converts between them can reintroduce the bug in their own code, by mapping a nil pointer to `Clear()` when they meant to preserve.
+`ToUpdate()` is the documented path across that boundary, which promotes it from a convenience to a safety mechanism — its doc comment now says so.
+
+The error message is load-bearing design, not a detail.
+The fastest way to silence `FieldNotSetError` is to write `Clear()`, which destroys the value the error exists to protect, so the message names `ToUpdate()` as the remedy that preserves it.
+This is the one failure mode the rejected `AssignStep` option would not have had, since there the assignee is simply not reachable from `UpdateStep`.
+
+`FieldNotSetError` carries a field name, departing from decision 16's rule that pre-flight errors are field-less sentinels.
+The departure is deliberate: decision 16 reasoned that there is only one way to have no steps, whereas a reusable type makes "which field" genuine per-occurrence detail.
+
+The Add/Update asymmetry is accepted and is the same operation-level distinction the `AssignStep` option would have needed.
+A create has no stored assignee to destroy, so requiring `Clear[string]()` on every unassigned `AddStep` would be ceremony with nothing behind it.
+
+One existing test had encoded the defect as intended behaviour — `TestUpdateStepFullReplaceAndActionRefetch` asserted that an omitted assignee clears the column, with a comment saying so.
+It now clears through `Clear[string]()` explicitly.
+`TestToUpdateRoundTrip` was extended to cover a step that actually has an assignee: the previous fixture had none, so the round-trip never exercised carrying a non-nil value forward, which is the case this decision exists to protect.
