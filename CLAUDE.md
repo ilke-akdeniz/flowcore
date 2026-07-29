@@ -54,6 +54,14 @@ One guard against over-correcting: "we know we'll need X eventually" is not a li
 A capability earns its place this slice only if it's the correctness condition of something being built now, not because it's on the roadmap.
 (The completion-path locking mechanism stays deferred on precisely this ground, even though concurrency is central to the library.)
 
+**Foresight is not speculation, if it adds nothing unused today.**
+The guard above stops artifacts with no caller: a column, a table, a hook that nothing calls yet.
+It does not stop choosing, among solutions to a problem that exists right now, the one whose mechanism also covers a need already documented as coming.
+The test: does this solution add any type, field, column, or method that has no caller today?
+If yes, it's speculative — defer it, migrate when the real feature lands.
+If no, its usefulness for tomorrow is a property of the design, not a thing built ahead of schedule.
+This is a narrow allowance, not a license to design for the roadmap: it applies to picking between implementations of a problem already in front of you, never to justify adding structure with no caller yet.
+
 ## Identifier naming
 
 Full, complete-word identifiers for domain-concept variables, struct fields, and parameters — no truncation, regardless of scope (`catalog`, not `c`; `definition`, not `def`; `action`, not `act`).
@@ -81,6 +89,13 @@ Claude Code writes the code and makes local implementation decisions.
 Ask before making design decisions that change the model, an invariant, or a trade-off — those are resolved with the owner, and land in `docs/system-design.md` first.
 Prefer small, reviewable changes.
 Explain non-obvious decisions briefly.
+
+## Doc authority
+
+`docs/decisions.md` is authoritative for design reasoning.
+`docs/architecture.md` is a derived, illustrative view of package and struct-level structure — not a second source of truth.
+When the two appear to disagree, `decisions.md` wins.
+`architecture.md` is refreshed periodically, not automatically after every decision, so staleness between refreshes is expected, not a bug to chase down immediately.
 
 ## Markdown conventions
 
