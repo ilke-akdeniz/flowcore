@@ -102,3 +102,39 @@ type UpdateActionParams struct {
 	NextStepID       *uuid.UUID
 	TerminalStatusID *uuid.UUID
 }
+
+// The instance-side params, for the Engine. Nullable does not appear in either:
+// nothing updates an instance row, so full replace — and the omitted-field hazard
+// it carries — never arises. A plain pointer means what it says, absent.
+
+// StartParams are the inputs for starting a workflow. The definition is read and
+// snapshotted at that moment, so later edits to it do not reach the run.
+//
+// SubjectReference is opaque and required: the library compares it for equality,
+// never interprets it, and it is half the key of the one-active-run-per-subject
+// rule. SubjectVersionToken is opaque and optional — supply it to make every
+// decision in the run answerable as "which revision was this", or leave it nil if
+// the subject does not have revisions worth recording.
+type StartParams struct {
+	WorkflowDefinitionID uuid.UUID
+	SubjectReference     string
+	SubjectVersionToken  *string
+}
+
+// CompleteParams are the inputs for completing the step a run is waiting on.
+//
+// VisitID names the visit being completed, taken from CurrentStep.VisitID. It is
+// how a stale caller is caught: if the run has moved on — including looping back
+// to the same step — the visit that was current when the caller last looked is
+// closed, and completing it is refused rather than silently applied to a visit
+// the caller never saw.
+//
+// ActionID must be an action of that visit's step, which the schema enforces.
+// CompletedBy is required and opaque: the library records who acted and never
+// decides whether they were allowed to.
+type CompleteParams struct {
+	VisitID             uuid.UUID
+	ActionID            uuid.UUID
+	CompletedBy         string
+	SubjectVersionToken *string
+}

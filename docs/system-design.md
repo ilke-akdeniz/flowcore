@@ -95,8 +95,13 @@ The definition id is part of the request, not just the subject.
 Two runs of _different_ definitions may be active on one subject at the same time, so the subject alone does not identify a run.
 
 _Complete Step_
-Caller sends {subjectId, subjectVersionToken, stepId, actionId, completedBy}.
+Caller sends {visitId, actionId, completedBy, subjectVersionToken}.
 Library validates, stamps completedBy, executes the workflow, returns workflow_status and current_step.
+
+The visit id, not a step id, is what identifies the work being completed.
+There is only ever one open visit per run, so nothing needs identifying — the id is there to catch a caller acting on a stale view.
+A step id cannot do that job once loops exist: a run that advanced and looped back sits on the same step again, so a stale step id still matches and the decision lands on a visit the caller never saw.
+Subject reference and definition id are not sent; the visit identifies the run.
 
 _Get Assigned Steps (worklist)_
 Caller sends a set of opaque assignee references — typically the current user plus their group memberships, resolved client-side — and the library returns open steps whose assigneeId is in that set.

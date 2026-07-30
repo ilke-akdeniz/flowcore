@@ -1160,3 +1160,111 @@ Keeping it while deferring the indexes it exists for would have been an inconsis
 **Consequence.**
 When the worklist slice lands it adds one column, one backfill, and three partial indexes — none of it lossy, all of it measured in advance.
 The numbers to expect are recorded in decisions 24 and 25 so the work does not need re-probing.
+
+---
+
+## 33. Instance read surface: two projections, scoped by what the tests must prove
+
+**Context.**
+The instance-side Go types could not be designed without first settling what the Engine returns, because the instance side has a read the definition side never had.
+A definition's read shape _is_ its row shape, so `Catalog.Get` returns a nested tree of row types.
+"Where does this run stand" is a projection across the workflow, its snapshot step, and that step's actions; a visit record needs its step's name, which is on another table.
+
+The scope question was answered by asking what a test needs in order to conclude the Engine works.
+That framing settled a question that had been stuck: a deep aggregate read had no nameable iteration-1 caller and no settled shape, and the test suite is a concrete caller whose assertions determine the shape.
+
+**Options.**
+One deep aggregate mirroring the definition side, with the caller locating the open visit.
+A projection for the in-scope flow plus a deep aggregate read.
+Projections only, sized to what the Engine must be proven to do.
+
+Type topology, separately: projections only with the store taking scalars; unexported row structs for writes plus exported projections for reads; exported row types per table plus projections.
+
+**Decision.**
+Two exported projections — `WorkflowState` (with `CurrentStep`, `Action`) and `StepVisit` (with `Completion`) — returned by `GetState` and `GetHistory`.
+No Go type mirrors `flowcore.step` or `flowcore.action`.
+Unexported row structs carry the write path, and land with the store functions that use them rather than in the types slice.
+`Completion` is a nested pointer, nil while a visit is open.
+`CurrentStep` is a pointer, nil once the run is complete.
+
+**Why.**
+A deep aggregate makes the library's most common call — "what step is this on?" — walk the 102 MB snapshot table and the full visit history so the caller can find one row, when a 328 kB partial index answers it directly (decision 25).
+It also pushes "find the open visit" into every client, which is the derivation the Engine exists to own.
+
+Exported row types were rejected because nothing in iteration 1 hands a client a raw snapshot row, so exporting four types commits to a shape with no consumer.
+Scalars-only on the write path was rejected on a concrete defect risk: a snapshot step insert carries eight columns, several of them adjacent same-typed uuids, so a transposition compiles and silently writes a status id into a provenance column — exactly what the provenance test exists to catch.
+A keyed struct literal makes that transposition compile-visible.
+
+Decision 1 refused splitting store types from façade types to avoid "two representations of each entity and a mapping layer between them," and that objection was weighed here.
+It does not apply: its concern was a _package wall_ forcing the same shape to be spelled twice, whereas these two shapes differ genuinely — a row against a projection across four tables — and the write struct is never returned to anyone.
+
+Nesting `Completion` mirrors `ck_step_visit_completion`, which makes completion time, completer, and selected action all-or-nothing in the schema.
+One pointer makes the same rule hold in Go, so a half-completed visit is unrepresentable in both places, and `Completion.By` cannot be read without acknowledging the visit might be open.
+`SubjectVersionToken` sits inside it because it is only ever written at completion, and stays a pointer because it is optional even then.
+A pointer `CurrentStep` beats a value plus an is-complete flag for the same reason: a zero-valued struct lets a caller read an empty step name off a finished run and believe it.
+
+**Consequence.**
+The audit projection carries more than "which steps were visited": without `completed_by`, the selected action, and the subject version token, the tests cannot cover the stamping behaviour, which is where decision 30's schema-mandatory completer and the whole subject-immutability mechanism live.
+
+Provenance ids are not on the read types and still require a test in this iteration.
+Nothing reads them until the worklist slice, so a bug writing a zero uuid would be silently unfixable for every run in the meantime — which is the irrecoverability that justified decision 24 in the first place.
+The suite is in-package and already uses raw SQL and unexported store functions, so those columns are asserted directly without widening the public surface.
+
+A latent defect in the test harness surfaced here, following from decision 24's removal of the foreign key to the definition.
+`newCatalog` isolates tests with `truncate flowcore.workflow_definition cascade`, and `TRUNCATE … CASCADE` follows foreign keys — of which there is now none from `workflow` to `workflow_definition`.
+Probed: every instance row survives that truncate.
+Left unaddressed, tests leak rows into one another and `ux_workflow_active` starts failing tests spuriously when two of them use the same subject, so decision 14's isolation strategy quietly stops holding.
+The fix is to name `flowcore.workflow` in the truncate as well, which does reach `step`, `action`, and `step_visit` through its own foreign keys.
+It is deliberately not applied in the types slice, since no test writes an instance row yet.
+
+`GetState` rather than `GetCurrentStep` as the method name, because the type carries workflow-level fields and `state.CurrentStep.Name` reads better than the same expression off a method claiming to return a step.
+The flow in `docs/system-design.md` keeps its name; a flow is not a method.
+
+---
+
+## 34. Complete identifies a visit, not a step
+
+**Context.**
+The _Complete Step_ flow specified `{subjectId, subjectVersionToken, stepId, actionId, completedBy}`.
+Decision 23's support for loops makes the step id unsound as written, which only became visible once visits were separate rows.
+
+**Options.**
+`actionId` alone.
+`actionId` plus the visit id.
+`actionId` plus the step id, as documented.
+
+**Decision.**
+`CompleteParams{VisitID, ActionID, CompletedBy, SubjectVersionToken}`.
+Subject reference and definition id are not carried — the visit identifies the run.
+
+**Why.**
+The identifier's job is staleness detection, not addressing: there is exactly one open visit per run, so nothing needs identifying.
+`actionId` already detects a step-level mismatch for free, because `fk_step_visit_selected_action` is scoped to `(step_id, selected_action_id)` — completing the open visit with an action from another step is rejected by the database.
+So a step id adds almost nothing, and where it does matter it is wrong.
+
+The failing case: a client reads the state on visit 1 at "Manager Review"; while the user deliberates, someone else approves through to Director Review and rejects back, opening visit 3 at "Manager Review" again.
+The client submits step id "Manager Review" and action "approve".
+Both match, the completion succeeds, and a decision the user formed about one iteration of the review is stamped onto a visit they never saw.
+That is the failure mode the subject version token exists to catch for _subjects_, occurring here to the workflow's position.
+
+The documented option is the worst of the three on decision 17's reasoning: it looks like a guard and is not one, which is worse than having no guard at all.
+
+The visit id also yields the cleanest implementation — one conditional statement with no read-then-write window:
+
+```sql
+update flowcore.step_visit
+   set completed_at = now(), completed_by = $2, selected_action_id = $3, subject_version_token = $4
+ where id = $1 and completed_at is null
+```
+
+Zero rows affected covers stale view, already completed, and unknown visit together, distinguished by a follow-up read only when building the error.
+
+This is not the deferred synchronization work and it is not an artifact without a caller: `CurrentStep.VisitID` is read by the client and `CompleteParams.VisitID` by the Engine.
+It is a choice between two designs for a problem already in hand.
+
+**Consequence.**
+`docs/system-design.md`'s _Complete Step_ flow was corrected, and the client must now carry a visit id — a value the flow's documented response body did not previously expose, which `CurrentStep.VisitID` now does.
+`CurrentStep` therefore carries both a step id and a visit id, and they are not interchangeable; the doc comment says so, because a caller passing the step id to `Complete` would otherwise get a puzzling not-found.
+
+`CompletedBy` is a plain `string`, not a pointer, matching the schema CHECK that makes it mandatory at completion.
+`Nullable[T]` appears nowhere on the instance side: nothing updates an instance row this slice, so full replace and its omitted-field hazard never arise.
