@@ -749,3 +749,414 @@ A create has no stored assignee to destroy, so requiring `Clear[string]()` on ev
 One existing test had encoded the defect as intended behaviour — `TestUpdateStepFullReplaceAndActionRefetch` asserted that an omitted assignee clears the column, with a comment saying so.
 It now clears through `Clear[string]()` explicitly.
 `TestToUpdateRoundTrip` was extended to cover a step that actually has an assignee: the previous fixture had none, so the round-trip never exercised carrying a non-nil value forward, which is the case this decision exists to protect.
+
+---
+
+Decisions 23–32 were settled together during the instance-side schema slice, before any Go was written.
+Several were resolved by probing Postgres directly; those probe results are quoted where they changed an answer.
+
+---
+
+## 23. Instance-side snapshot: eager graph copy plus an append-only visit table
+
+**Context.**
+`docs/system-design.md` said instance entities "are snapshots taken from a definition at start time" and listed `Workflow{steps, current step id}` and `Step{actions, selectedAction, …}`.
+Read literally that is one row per definition step, carrying both the frozen template and the record of what happened.
+That conflation only works if a step is visited at most once, and nothing prevents a cycle — decision 4 says so explicitly ("an action can still point at its own step … that's deliberate").
+
+**Options.**
+A1 — eager copy where the step row is both template and visit record.
+A2 — eager copy of the graph, with each _entry into_ a step recorded as its own row.
+B — lazy materialization: copy a step from the definition when the run arrives at it.
+C — no copy; instance rows reference definition rows.
+
+**Decision.**
+A2.
+Snapshot tables (`step`, `action`) freeze the graph at start; `step_visit` records each entry into a step.
+A step not yet reached has **no** visit row — absence of a row, never a null timestamp, represents "not yet visited."
+
+**Why.**
+B and C both break principle 2: a definition edited mid-run leaks into the run, and a step deleted mid-run strands it.
+A1 fails on loops, which the schema already permits.
+A reject→rework→resubmit cycle revisits a step, and a single row cannot record two visits — the second overwrites the first's completion stamps, destroying the audit history the trade-offs section requires ("Why did this finished workflow reach this state?").
+A1 also makes "which step is current?" ambiguous: every unvisited step row would carry a null `completed_at`, so currency would need a pointer or an ordinal on top.
+Under A2 that ambiguity does not exist to be managed.
+
+This is not speculative structure.
+The visit table is not built for an absent feature — it is the only shape in which an audit requirement that exists _today_ survives a graph the schema _already_ permits.
+
+**Consequence.**
+The eager copy is the largest storage line in the design, and it was measured rather than guessed: 100k runs over an 8-step definition produce 800k snapshot step rows / 102 MB, against 41 MB of visit rows.
+Immunity is not free and that is its price.
+
+A step visited twice has two visit rows and both are preserved; verified by walking a run through step 1 → step 4 → step 1 → terminal.
+
+---
+
+## 24. No instance status table; definition ids recorded as provenance, never enforced
+
+**Context.**
+Two questions that turned out to be one.
+The State section listed _Workflow Status_ `{id, workflow id, name}` as an instance entity.
+Separately, a snapshot that copies only frozen _names_ loses the link back to the definition row a value came from — and the owner pushed on exactly this: after an admin renames "Director Approval" or deletes the "Open" status, how does anyone still query "all steps on Director Approval"?
+
+**Options.**
+Instance status table mirroring the definition side.
+Frozen text only, no ids.
+Frozen text plus the definition's id, recorded with no foreign key.
+Frozen text plus a real foreign key, restricting deletes.
+Soft delete on the definition side.
+
+**Decision.**
+No instance status table.
+Every instance row records the id of the definition row it was copied from — `workflow_definition_id`, `step_definition_id`, `action_definition_id`, `workflow_status_definition_id` — as a plain uuid with **no foreign key**, alongside the frozen name.
+
+**Why.**
+The status table collapses on inspection: a status has no attribute but a name, and per-run status ids are useless to every caller, since two runs started a minute apart mint different ids for the same logical status.
+No cross-run query can key on them.
+The only stable handle is the _definition's_ status id — which is the provenance column, not a table.
+
+On provenance, text alone is lossy in a way that is easy to get backwards.
+Deletion costs nothing: with no foreign key, the frozen text and the recorded id both survive it.
+**Rename** is the lossy event, and text drifts silently — historical runs say "Director Approval", later runs say "Director Sign-off", and nothing records they are the same step, so every cross-run query undercounts with no error.
+A filter list built from `distinct name` shows a phantom duplicate.
+
+The recorded id also distinguishes two admin intents that text cannot tell apart: renaming a status keeps the id, so the query spans the rename; creating a new status and repointing the steps yields a different id, so the query correctly separates them.
+That distinction is the admin's actual intent.
+
+A real foreign key was rejected as the same overreach decision 9 refused when it declined global definition-name uniqueness: it makes any step, status, or action ever touched by a run undeletable forever, changes the behaviour of the shipped `DeleteWorkflowDefinition`, and hands the admin a `ReferencedError` naming instance rows they may not be permitted to see.
+Recording an identifier and enforcing nothing about it is this codebase's established answer, already used four times — `assignee_id`, `subject_reference`, `subject_version_token`, `completed_by`.
+This is principle 1 turned inward, onto the library's own ids.
+
+**On the speculation question**, because these columns have a writer but no reader in iteration 1 and are therefore speculative by the letter of the rule.
+The overriding argument is irrecoverability, which is narrower than "it's on the roadmap": a deferred column is normally free because the data can be backfilled, whereas provenance never recorded cannot be reconstructed for any run that executed in the meantime.
+That test is applied consistently in decision 32, where it goes the other way and defers the matching indexes.
+
+**Consequence.**
+Soft delete on the definition side stays available and unbuilt; it is strictly better on filter-label resolution and needs these columns anyway, so adopting them now costs nothing if it ever lands.
+Resolving a display label for a group whose definition row is gone requires a choice — most recent frozen name is the sensible default.
+
+---
+
+## 25. Current step derived from the open visit, not a pointer
+
+**Context.**
+The State section listed `current step id` on _Workflow_, and decision 6 chose a pointer for the definition's entry step.
+Both precedents point the wrong way here.
+
+**Options.**
+Explicit `current_visit_id` on the workflow, with a circular deferrable foreign key, mirroring decision 6.
+Derived: the current step is the one visit row with `completed_at is null`, with a partial unique index enforcing at most one.
+Both.
+
+**Decision.**
+Derived, no pointer.
+
+```sql
+create unique index ux_step_visit_open
+    on flowcore.step_visit (workflow_id) where completed_at is null;
+```
+
+No `last_visit_id` either.
+
+**Why.**
+Decision 6 rejected derivation for the entry step because derivation over a _graph_ fails on cycles (no such step) and on multiple unreachable steps (two such steps).
+A visit row is not a graph node, and "the visit that has not finished" is unambiguous under every graph shape, cycles included.
+The reason that killed derivation there does not apply.
+
+A pointer also cannot enforce the invariant the index enforces.
+Two open visits with the pointer naming one, or a pointer aimed at an already-closed visit, are both representable and both corrupt — the index makes them unrepresentable, which is decision 4's argument for constraints over application checks.
+
+Performance was probed rather than assumed, at 100k workflows / 10k open / 400k visit rows.
+Single workflow to its current step is a wash — 0.028 ms and 7 buffers derived, 0.020 ms and 8 buffers pointered, one index probe plus a heap fetch either way.
+In bulk the pointer **loses**: current step of all 10k open workflows costs 7.5 ms / 5,372 buffers derived, against 12.9 ms / 5,516 (planner chose a full sequential scan of all 400k visit rows) or 8.4 ms / **40,156** buffers when forced into a nested loop.
+The reason is structural, not incidental to the dataset: `visit.id = workflow.current_visit_id` is an opaque equality, so nothing tells the planner that only 10k of 400k rows are ever pointed at, whereas `completed_at is null` is satisfied directly from an index containing nothing but the open set — 328 kB against 2,784 kB for the full-table equivalent.
+**A partial index on the open set is sized by runs in flight, not by accumulated history**, so it stays cached indefinitely.
+
+The pointer would only ever help traversal _from_ a workflow _to_ its step, and every query that motivated the question runs the other way — from an assignee or a step concept, filtered to open.
+
+**Consequence.**
+The index doubles as the completion path's concurrency mechanism, which is why `CLAUDE.md`'s deferred locking decision stays deferred.
+Probed by forcing two concurrent completions of one run: the loser got `duplicate key value violates unique constraint "ux_step_visit_open"` and exactly one open row survived.
+This is the "unique constraint" option the Synchronization section lists, with no `SELECT FOR UPDATE`, no version column, and no serializable isolation.
+It adds no artifact that lacks a caller — it is the index the invariant required anyway — so it clears the "foresight is not speculation" test rather than leaning on it.
+
+`current step id` comes off _Workflow_ in the State section.
+The one query this shape is worse at is bulk history: the final step of all 90k completed runs needs `distinct on (workflow_id)` over full history, 157 ms / 353k buffers, against 0.031 ms for a single run.
+Accepted — it is a reporting query, and "where did this run end up" is better answered by the workflow's stamped terminal status than by chasing its last visit.
+A retained `last_visit_id` would fix it, and is deliberately not built: it is a different column with different semantics from the `current_visit_id` that was rejected.
+
+---
+
+## 26. Workflow status is positional, and stamped at every transition
+
+**Context.**
+The invariant "status reflects the current step's status while the run is in progress, or the terminating action's status once the run is complete" existed only as a _consequence_ line at the bottom of decision 7, which weighed where the terminal-status column lives.
+The invariant itself was never weighed.
+The owner asked for it to be reassessed before anything was built on it.
+
+**Options.**
+Keep it as a derivation rule and compute status on read.
+Keep it, restated as a stamping rule, with the value stored on the workflow.
+Store only the terminal status; derive the in-flight one.
+Carry status on transitions instead of positions: every action names the status it results in.
+
+**Decision.**
+Keep the rule, restated as **stamping**: the Engine writes the workflow's status at every transition, from the entered step's snapshot status on a routing transition and from the terminating action's terminal status on a terminating one.
+One status pair on the workflow (`workflow_status_definition_id` + `workflow_status_name`), overwritten at each transition; its final value _is_ the terminal status.
+
+**Why.**
+The shape is forced rather than arbitrary: a running workflow _is at_ a step, a finished one is at no step, and those are the only two places a label can come from.
+But the phrasing was wrong, and the phrasing was doing damage.
+"Reflects" reads as a derivation rule, which makes it look mandatory to recompute status on every read — a `union` of two multi-hop joins with different shapes, neither indexable on the status, for the query "which workflows are in status Open?".
+As a stamping rule the stored value is authoritative with documented provenance, and that query is a single index probe.
+Same behaviour, materially different obligation on the schema.
+
+Storing only the terminal status was rejected for leaving that query split across two mechanisms forever.
+
+Carrying status on transitions is the honest alternative and would remove a real limitation (below).
+Rejected on three grounds: it is a schema change to the shipped, tested definition side; it loses the integrity property, since two actions routing to one step could set contradictory statuses and a run's status would no longer agree with where it is; and it makes authoring repeat a status on every action converging on a step.
+
+**Consequence.**
+An expressiveness limit is now recorded that was previously implicit: **two actions routing to the same step cannot produce different workflow statuses.**
+"Approve" and "request more info" both routing back to a Rework step cannot show "In Rework" and "Awaiting Information" — the only remedy is duplicating the step, which pollutes the graph and splits one queue in two.
+Transitions-carry-status is the shape to reach for if that limit is ever hit in practice.
+
+The stamped pair is the first genuinely redundant **mutable** state in the schema.
+`action.workflow_id` and the provenance ids are redundant but immutable; this one can drift if a transition ever writes one column and not the other.
+No CHECK can enforce it — only the Engine's transaction can, which is worth knowing before trusting the value.
+
+---
+
+## 27. One active workflow per {subject, definition}, enforced in schema
+
+**Context.**
+`docs/system-design.md` stated the invariant under _Engine_ with no entry in this log.
+The _Get Current Step_ flow is specified as "Caller asks for the current step **for a subject**", which only has a single answer if the invariant holds.
+
+**Options.**
+Enforce in schema with a partial unique index.
+Do not enforce; record what the caller asks for and leave the rule to the client.
+Enforce per subject across all definitions.
+
+**Decision.**
+Enforce in schema.
+
+```sql
+create unique index ux_workflow_active
+    on flowcore.workflow (subject_reference, workflow_definition_id)
+    where completed_at is null;
+```
+
+`subject_reference text not null`, capped 1–500.
+
+**Why.**
+This is not the library interpreting the subject reference — it is using equality, which principle 1 explicitly permits, to keep its own state unambiguous.
+It is also the reversible direction, decision 9's reasoning for keeping step-name uniqueness: dropping a unique index later is trivial, adding one after clients hold duplicate rows is not.
+Enforcing across all definitions was rejected as obviously wrong — two different definitions running on one document is legitimate.
+
+`not null` is load-bearing, not stylistic, and a probe settled it.
+Postgres treats NULLs as distinct in a unique index, so a nullable `subject_reference` does not weaken the invariant — **it makes it not apply at all** to those rows: three active runs with a null subject were inserted and all three coexisted.
+The cap's lower bound of 1 rejects `''` for the same reason, so the invariant cannot be satisfied vacuously.
+
+**Consequence.**
+The invariant permits concurrent runs of _different_ definitions on one subject, so the subject alone still does not identify a run.
+`GetCurrentStep` therefore takes `(subjectReference, workflowDefinitionID)`, and the flow description in `docs/system-design.md` was corrected to say so.
+
+A client wanting subject-less runs should pass a synthetic reference (`quarterly-2026-Q3`), which stays meaningful to them and keeps the invariant intact.
+`nulls not distinct` would be the alternative and is not used.
+
+---
+
+## 28. Assignee lives in two places, with two different meanings
+
+**Context.**
+The docs said only "instance `assignee_id` — opaque, copied from StepDefinition at start, mutable afterwards (reassignment)," written before decision 23 split the snapshot from the visit record.
+That split created two candidate homes.
+
+**Options.**
+Visit row only.
+Snapshot step only.
+Both, with distinct meanings.
+Snapshot default plus a nullable override on the visit, null meaning inherit.
+
+**Decision.**
+Both.
+The snapshot `step` holds the **frozen default**, copied from the definition at start and immutable thereafter.
+The `step_visit` holds the **live assignee**, seeded from that default on entry and mutable.
+
+**Why.**
+Visit-only is broken: a second visit has no frozen default to seed from, so it would have to re-read the definition, which is the immunity break principle 2 forbids.
+Step-only destroys the audit — reassignment would mutate the snapshot, so every past visit retroactively shows the current assignee, and "who was this assigned to when they approved it" becomes unanswerable.
+That is the property decision 23 exists to provide.
+
+The two columns are not redundant; they answer different questions — who _should_ act on this step, and who was expected to act _on this visit_.
+It is the definition/instance distinction repeated one level down.
+It also fixes loop semantics: a second visit resets to the frozen default rather than inheriting a one-off reassignment, which treats a reassignment as an exception for that visit rather than a permanent redefinition of the step.
+
+The nullable-override option is the one to warn against, because it looks economical.
+It is "null means inherit" — patch semantics, which decisions 21 and 22 already rejected as a shape for this codebase — and it breaks the query work: the real assignee becomes a `coalesce` across a join, so the partial index on `step_visit (assignee_id) where completed_at is null` cannot serve the worklist, which measured 19.6 ms / 6,591 buffers as a join against 0.06 ms / 70 buffers as an index probe.
+
+**Consequence.**
+No `ReassignStep` method this slice — reassignment is not in the iteration 1 scope list, and "mutable" here is the _absence_ of a constraint, not an artifact with no caller.
+Both columns have iteration-1 readers: the frozen default seeds each entry, and the visit assignee is part of what `GetCurrentStep` returns.
+Both stay opaque `text` with no foreign key and no format rule.
+
+---
+
+## 29. Every stored text column carries a length cap, including one on the definition side
+
+**Context.**
+Decision 9 capped the four definition-side name columns at 200 and deliberately left `assignee_id` with "no FK, no CHECK, nothing," on the grounds that a cap needs "a real reason beyond hygiene" — the reason there being the ~2700-byte btree index-entry ceiling.
+Applying that rule literally to the instance side would leave `subject_version_token` uncapped, since it sits in no index.
+The owner rejected that: an opaque field still has a documented intended shape, and without a cap a client can store a blob in it and the library bears the cost.
+
+**Options.**
+Cap only indexed columns, per decision 9's stated reason.
+Cap every stored text column against its documented intended domain.
+
+**Decision.**
+Cap every stored text column.
+Opaque client-supplied identifiers — `subject_reference`, `subject_version_token`, both `assignee_id` columns, `completed_by` — cap at 1–500.
+Human-facing names stay at 1–200.
+**`step_definition.assignee_id` gains the 500 cap as an additive migration**, correcting decision 9.
+
+**Why.**
+Two arguments beat "no stated reason."
+The cap is the reversible direction: raising one is a one-line `ALTER`, lowering one after clients hold longer values is impossible — the same asymmetry decision 9 itself used to justify keeping step-name uniqueness.
+And "opaque" is a rule about _interpretation_, not a waiver on resources: a multi-megabyte token is TOASTed out of line and then detoasted on every read that returns it, plus its weight in WAL, replication, and backups.
+Principle 1 never promised the library would absorb unbounded cost for data it refuses to read.
+
+The definition-side fix is not tidiness — leaving it uncapped is a **correctness defect**, because the snapshot copies that column.
+A client sets a 2 MB `assignee_id`, `Catalog.AddStep` accepts it (no cap), and `Engine.Start` later fails with a CHECK violation when copying it into the capped snapshot column.
+A definition the library itself validated becomes unstartable.
+So the cap could not be added on the instance side alone.
+
+**Consequence.**
+`check (char_length(x) between 1 and 500)` on a **nullable** column behaves correctly, verified by probe: NULL passes (so "unassigned" stays expressible), `''` is rejected, 500 accepted, 501 rejected.
+One constraint delivers both the ceiling and the non-empty rule.
+`completed_by` picks this up too, so "completed by empty string" cannot vacuously satisfy decision 30's completion CHECK.
+
+Both caps stay inside the btree ceiling at worst-case UTF-8, which matters because `subject_reference` and `step_visit.assignee_id` both sit in indexes.
+Every new CHECK needs an explicit name and a case in the error mapper, or decision 17's fail-loud fallback reports it as `UnmappedConstraintError`.
+`InvalidNameError` is the wrong type for an over-long assignee — an assignee is not a name — so the taxonomy likely needs one more member.
+That is a Go decision, deliberately left to the slice that writes it.
+
+---
+
+## 30. The completion contract lives in the schema; the library owns the clock
+
+**Context.**
+A visit's completion columns are `completed_at`, `completed_by`, `selected_action_id`, `subject_version_token`.
+Two questions: which of the Engine's stated invariants become constraints, and who generates the timestamps.
+
+**Decision.**
+Four constraints and one clock rule.
+
+Completion is all-or-nothing:
+
+```sql
+constraint ck_step_visit_completion check (
+    (completed_at is null) = (completed_by is null)
+    and (completed_at is null) = (selected_action_id is null)
+)
+```
+
+The selected action is referenced by a **step-scoped** composite foreign key, `(step_id, selected_action_id) → action (step_id, id)`.
+`subject_version_token` is deliberately excluded from the completion group.
+`check (completed_at is null or completed_at >= entered_at)`.
+Timestamps come from SQL `now()`, written explicitly in the statements — not from Go, not from the client, and not from a column `DEFAULT`.
+
+**Why.**
+The step-scoped foreign key turns an Engine invariant into a schema guarantee.
+`docs/system-design.md` requires that "the requested action exists in the step"; because the _pair_ must match, an action belonging to another step is rejected by the database on every path, including a DBA in psql — decision 4's stated reason for preferring foreign keys over repository validation in a schema the library does not own.
+Under `MATCH SIMPLE` a null `selected_action_id` skips the check, so an open visit is unaffected, the same property decision 4 relied on for terminal actions.
+
+`completed_by` is **required at completion**, and the mechanism matters because the column declaration misleads.
+It must be nullable, since an open visit has no completer, so `NOT NULL` would make opening a step impossible; the requirement therefore lives in the CHECK, which enforces it exactly when it becomes meaningful.
+A completed step with no completer is worthless for audit, and recording who acted is not interpreting who they are.
+"Who approved this expense?" is guaranteed answerable by the schema; "were they allowed to?" remains client policy, unchanged by this.
+
+The token is excluded because decision 26's sibling decision made it optional; folding it into the group would re-impose the mandate through the back door.
+
+On the clock: these are not opaque client data.
+`subject_reference`, `assignee_id`, and `completed_by` name things in the _client's_ world, which is why they are recorded uninterpreted.
+A timestamp is the library's own record of when **it** performed a transition, so a client-supplied value would make the audit trail only as trustworthy as the caller.
+`now()` rather than Go's `time.Now()` because `docs/system-design.md` contemplates "different library processes" against one database: under Go-side clocks, process A opens a visit at its `12:00:03` and process B, two seconds behind, completes it at its `12:00:02`, producing `completed_at < entered_at` from ordinary NTP drift.
+`now()` is transaction timestamp, so one clock serves everything and monotonicity across transactions is structural.
+Decision 2's "app-generated, no DB default" does not transfer — that was driven by needing ids _before_ insert so an action could reference a step in the same transaction, and nothing needs a timestamp before insert.
+Explicit in the statements rather than a `DEFAULT` because the closing `UPDATE` must set `completed_at` explicitly regardless, and one mechanism beats two.
+
+**Consequence.**
+The temporal CHECK is only safe _because_ the library owns the clock; under Go-side timestamps it would have to be withdrawn, since skew would fail legitimate completions.
+Its justification is therefore not "guards a stated invariant" but "makes the clock rule verifiable in the data."
+`workflow.started_at timestamptz not null` comes from the same decision.
+
+---
+
+## 31. Instance foreign-key topology, cascades, and deferrability
+
+**Context.**
+Decision 15 exists because a cascade probe was run against an incomplete schema and missed a case.
+So the topology was probed against real DDL rather than reasoned by analogy.
+
+**Decision.**
+`action`'s parent is `step`; `step_visit`'s parent is `workflow`.
+The three cascade drivers (`step → workflow`, `action → step`, `step_visit → workflow`) are immediate.
+The three reference foreign keys — `fk_action_next_step`, `fk_step_visit_step`, `fk_step_visit_selected_action` — are `ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED`.
+
+**Why.**
+`step_visit`'s parent is the workflow, not the step, and this is not cosmetic.
+Parenting it to the step would mean deleting a snapshot step **silently deletes its execution history** — the audit trail decision 23 exists to provide, destroyed in exactly the way decision 5 rejected `CASCADE` on next-step for silently doing the wrong thing.
+Parenting it to the workflow makes the step reference a NO ACTION reference key instead, so a step cannot be deleted while any visit references it.
+`action`'s parent is the step, mirroring the definition side, because parenting it to the workflow would orphan actions when a step is deleted.
+
+`NO ACTION` on the three reference keys mirrors decision 5: `SET NULL` would silently rewrite history (a visit's selected action becoming "no action"), `CASCADE` would delete rows in other branches, and `RESTRICT` is identical but can never be deferred.
+
+**On deferrability, the probe undercut the obvious justification and the honest reasoning is narrower.**
+Decision 15 needed deferral because a status was a direct cascade-child of the definition while the referencing action was a grandchild via step — two branches at different depths.
+**Decision 24 deleted that shape from the instance side**, and a whole-workflow delete was verified to succeed with the reference keys IMMEDIATE.
+So no probe forces deferral here.
+It is chosen anyway because `step_visit → action` _is_ a cross-depth reference — the visit is the workflow's child, the action its grandchild — and it passes today only because of the order Postgres happens to fire cascade triggers, which is not a property worth depending on given decision 15's precedent.
+Deferral changes no artifact, only the spelling of an existing constraint.
+
+**Consequence.**
+Deferred violations surface at `COMMIT` rather than at the offending statement, so the Engine's `Start` and `Complete` must route commit errors through the mapper, as `Catalog.Create` already does.
+
+Probed against the real DDL, all confirmed: whole-workflow delete cascades clean with visits present; a visit referencing a step of another workflow is rejected; a `selected_action_id` belonging to a different step is rejected; the XOR and terminal id/name pair CHECKs both fire; two snapshot rows for one definition step are rejected; deleting a step an action routes to is blocked; and **deleting a step any visit references is blocked**, which is audit protection falling out of the topology.
+No instance-side API deletes individual snapshot rows in iteration 1, so those last two are safety nets against a DBA or a future bug rather than mapped error paths.
+
+One process note: the first version of the routed-step test was invalid — no action actually routed to the step it deleted, so it proved nothing and appeared to pass.
+Corrected, it blocks.
+
+---
+
+## 32. Index set: invariants and foreign-key maintenance now, query-serving indexes deferred
+
+**Context.**
+Postgres does not index the referencing side of a foreign key automatically, and several of ours sit on a delete-check path.
+Separately, the probes in decisions 24 and 25 measured indexes serving the worklist and the "all open steps on Director Approval" queries — neither of which is in the iteration 1 scope list.
+
+**Decision.**
+Three categories built now.
+Invariants: `ux_workflow_active`, `ux_step_visit_open`, `uq_step_workflow_id`, `uq_action_step_id`, `uq_step_workflow_step_definition`.
+Foreign-key maintenance: `ix_action_workflow_step`, `ix_action_next_step`, `ix_step_visit_workflow_step`, `ix_step_visit_selected_action`.
+One iteration-1 read: `ix_workflow_subject` on `workflow (subject_reference, workflow_definition_id)`, **non-partial**.
+
+Deferred: the three partial indexes on `step_visit` keyed by `assignee_id` and `step_definition_id`.
+`step_visit.step_definition_id` itself is deferred with them.
+
+**Why.**
+`ix_workflow_subject` is non-partial deliberately, and the need only surfaced on enumeration: `ux_workflow_active` excludes completed runs, so `GetCurrentStep` against a _finished_ workflow — which must answer "complete, no current step" rather than not-found — would otherwise have no index at all.
+
+The deferral rests on the same irrecoverability test decision 24 used to _justify_ its columns, applied honestly in the other direction.
+An index recovers everything: `CREATE INDEX CONCURRENTLY` on a populated table, any time, no data loss.
+So the argument that overrode the no-speculative-structure rule for the provenance columns simply fails for indexes, and the rule applies unmodified — structure with no caller today.
+
+`step_visit.step_definition_id` was carried through the design on the strength of a 10× probe (1.4 ms / 644 buffers denormalized, against 19.6 ms / 6,591 buffers joining through `step`, because the join scans one snapshot row per workflow — 100,000 of them — to find 626 open visits).
+It is nonetheless deferred, because its only purpose is serving those deferred queries **and it is fully backfillable** from `step` in one `UPDATE … FROM`.
+Keeping it while deferring the indexes it exists for would have been an inconsistency.
+
+**Consequence.**
+When the worklist slice lands it adds one column, one backfill, and three partial indexes — none of it lossy, all of it measured in advance.
+The numbers to expect are recorded in decisions 24 and 25 so the work does not need re-probing.
