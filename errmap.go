@@ -41,6 +41,57 @@ const (
 	fkStatusWorkflow = "fk_workflow_status_definition_workflow"
 	fkStepWorkflow   = "fk_step_definition_workflow"
 	fkActionStep     = "fk_action_definition_step"
+
+	// The instance side.
+	//
+	// ixWorkflowActive enforces one active run per {subject, definition}.
+	ixWorkflowActive = "ux_workflow_active"
+
+	// The length CHECKs on opaque identifiers. Distinct from the name CHECKs
+	// above: these cap at 500 and map to InvalidIdentifierError, which names the
+	// field, because one type serves all of them.
+	ckStepDefinitionAssigneeLen = "ck_step_definition_assignee_len"
+	ckWorkflowSubjectLen        = "ck_workflow_subject_reference_len"
+	ckWorkflowTokenLen          = "ck_workflow_subject_version_token_len"
+	ckStepAssigneeLen           = "ck_step_assignee_len"
+	ckStepVisitAssigneeLen      = "ck_step_visit_assignee_len"
+	ckStepVisitCompletedByLen   = "ck_step_visit_completed_by_len"
+	ckStepVisitTokenLen         = "ck_step_visit_subject_version_token_len"
+
+	// The instance-side name CHECKs, which do cap at 200 and so map to
+	// InvalidNameError alongside the definition-side ones. They are unreachable
+	// through Start, which copies names the definition side already validated at
+	// the same limit; they exist in the table so a direct store call or a future
+	// caller cannot produce an UnmappedConstraintError for them.
+	ckWorkflowNameLen             = "ck_workflow_name_len"
+	ckWorkflowStatusNameLen       = "ck_workflow_status_name_len"
+	ckStepNameInstanceLen         = "ck_step_name_len"
+	ckStepStatusNameLen           = "ck_step_status_name_len"
+	ckActionNameInstanceLen       = "ck_action_name_len"
+	ckActionTerminalStatusNameLen = "ck_action_terminal_status_name_len"
+
+	// The instance-side action CHECKs. Both are unreachable through Start for the
+	// same reason — the definition side rejects the equivalent shape first — and
+	// are mapped so a direct store call fails as a domain error rather than loudly.
+	ckActionTerminalXORInstance  = "ck_action_terminal_xor"
+	ckActionTerminalPairInstance = "ck_action_terminal_pair"
+
+	// ux_step_visit_open is deliberately absent. Two concurrent completions of one
+	// visit serialize on the row lock, so the loser's conditional UPDATE matches
+	// nothing and returns VisitNotOpenError — it never reaches an insert. The index
+	// can only fire if Complete ignores its rows-affected result, which is a library
+	// defect, and UnmappedConstraintError is the correct way for a defect to surface.
+	//
+	// ck_step_visit_completion and ck_step_visit_temporal are absent on the same
+	// grounds: the Engine writes all three completion columns in one statement and
+	// takes both timestamps from now(), so a violation means the library is wrong,
+	// not the caller.
+	//
+	// The instance cascade-driver FKs (fk_step_workflow, fk_action_step,
+	// fk_step_visit_workflow) are absent too. Unlike their definition-side
+	// counterparts in decision 20, no concurrent delete can race them: Start creates
+	// every parent inside the same transaction as its children, so a missing parent
+	// is again a library defect rather than a caller's not-found.
 )
 
 // SQLSTATE codes we map. Kept as local constants to avoid a dependency on a
@@ -112,6 +163,35 @@ func mapInsertErr(err error, name string, parentEntity string, parentID uuid.UUI
 	return mapWriteErr(err, name)
 }
 
+// mapWorkflowInsertErr maps a database error from starting a workflow. It exists
+// for the same reason mapInsertErr does: the domain error needs data the raw
+// violation does not carry. ux_workflow_active reports the colliding pair as an
+// index expression, not as a subject and a definition, so the wrapper is handed
+// both.
+//
+// It lives here rather than in the store helper so that every constraint name
+// stays in one file — a renamed index is then a one-line change, which is the
+// property the central mapper exists to keep.
+func mapWorkflowInsertErr(err error, subjectReference string, workflowDefinitionID uuid.UUID) error {
+	if err == nil {
+		return nil
+	}
+
+	pg := asPgError(err)
+	if pg == nil {
+		return err
+	}
+
+	if pg.Code == sqlstateUniqueViolation && pg.ConstraintName == ixWorkflowActive {
+		return &ActiveWorkflowExistsError{
+			SubjectReference:     subjectReference,
+			WorkflowDefinitionID: workflowDefinitionID,
+		}
+	}
+
+	return mapWriteErr(err, "")
+}
+
 // mapDeleteErr maps a database error from a Delete path to the domain taxonomy.
 // entity and id name the row being deleted, used to populate ReferencedError
 // (the raw error identifies the referencing table, not the target being
@@ -163,15 +243,42 @@ func mapConstraintCommon(pg *pgconn.PgError, name string) (error, bool) {
 		return unmapped(pg), true
 	case sqlstateCheckViolation:
 		switch pg.ConstraintName {
-		case ckActionTerminalXOR:
+		case ckActionTerminalXOR, ckActionTerminalXORInstance, ckActionTerminalPairInstance:
 			return &InvalidActionError{}, true
-		case ckWorkflowDefinitionNameLen, ckStatusNameLen, ckStepNameLen, ckActionNameLen:
+		case ckWorkflowDefinitionNameLen, ckStatusNameLen, ckStepNameLen, ckActionNameLen,
+			ckWorkflowNameLen, ckWorkflowStatusNameLen, ckStepNameInstanceLen,
+			ckStepStatusNameLen, ckActionNameInstanceLen, ckActionTerminalStatusNameLen:
 			return &InvalidNameError{}, true
 		}
+
+		if field, ok := identifierField(pg.ConstraintName); ok {
+			return &InvalidIdentifierError{Field: field}, true
+		}
+
 		return unmapped(pg), true
 	}
 
 	return nil, false
+}
+
+// identifierField maps a length CHECK on an opaque identifier to the field name
+// InvalidIdentifierError reports. Kept as a lookup rather than a switch arm
+// returning a bare error, because the field name is the whole value of that error
+// — a caller storing four different opaque identifiers needs to know which one
+// the database rejected.
+func identifierField(constraint string) (string, bool) {
+	switch constraint {
+	case ckStepDefinitionAssigneeLen, ckStepAssigneeLen, ckStepVisitAssigneeLen:
+		return "assigneeId", true
+	case ckWorkflowSubjectLen:
+		return "subjectReference", true
+	case ckWorkflowTokenLen, ckStepVisitTokenLen:
+		return "subjectVersionToken", true
+	case ckStepVisitCompletedByLen:
+		return "completedBy", true
+	}
+
+	return "", false
 }
 
 func unmapped(pg *pgconn.PgError) error {

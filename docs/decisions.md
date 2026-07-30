@@ -1268,3 +1268,75 @@ It is a choice between two designs for a problem already in hand.
 
 `CompletedBy` is a plain `string`, not a pointer, matching the schema CHECK that makes it mandatory at completion.
 `Nullable[T]` appears nowhere on the instance side: nothing updates an instance row this slice, so full replace and its omitted-field hazard never arise.
+
+---
+
+## 35. Instance store: read mechanics, and six errors the instance side needs
+
+**Context.**
+The instance-side store helpers, as free functions over a `querier`, following decision 11.
+Three questions had to be settled: how a projection spanning four tables is read, whether the snapshot inserts batch, and what the error taxonomy is missing.
+
+**Decision — read mechanics.**
+`getWorkflowState` is two queries inside a `RepeatableRead`, `AccessMode: ReadOnly` transaction: one joining `workflow` to its open visit and that visit's step, then `listActionsByStep`.
+`listStepVisits` is a single query with no transaction.
+Snapshot inserts are one `Exec` per row, in a loop.
+
+**Why.**
+A single wide join for `getWorkflowState` was the tempting option, because it needs no transaction at all — the direction decision 19 pushed.
+It was rejected on decision 12's recorded reasoning: a finished run has no open visit, so every joined column becomes nullable, and the scan degenerates into a wall of pointers whose nil-ness must be re-read as "no current step" — the "left-joins for empty sets get fiddly" problem, not hypothetically but on the main path.
+Two queries on the pool without a transaction was rejected outright: a concurrent `Complete` landing between them returns the status from before a transition beside the step from after it, so a single documented response would contradict itself.
+
+The transaction is cheap here in a way decision 19's rejected one was not, and the distinction is the whole justification: this is repeatable read **plus read-only**, and decision 19 established that "a read-only snapshot cannot fail to serialize."
+No `40001`, no retry logic, no new error class.
+It is the same construction `Catalog.Get` already uses.
+
+`listStepVisits` needs none of that because its joins are strictly one-to-one — one step per visit, at most one selected action — so there is no fan-out to deduplicate and nothing to straddle.
+The asymmetry between the two reads is therefore principled rather than accidental: `getWorkflowState` has a one-to-many child, `listStepVisits` does not.
+
+Batching the snapshot inserts was rejected on a structural point, not on taste: `querier` has no `SendBatch`.
+Decision 10 confined that interface to `Exec`/`Query`/`QueryRow` deliberately, and widening the seam every store function is written against — to optimise a path nobody has measured, when `Catalog.Create` already writes a whole definition tree the same way — is the wrong trade.
+The loop and the batch produce identical rows, so this stays cheap to revisit if snapshot size is ever shown to matter.
+
+**Decision — six errors.**
+`ErrDefinitionHasNoInitialStep` (sentinel), `ActiveWorkflowExistsError{SubjectReference, WorkflowDefinitionID}`, `VisitNotOpenError{VisitID}`, `ActionNotAvailableError{ActionID, StepID}`, `InvalidIdentifierError{Field}`, and `WorkflowNotFoundError{SubjectReference, WorkflowDefinitionID}`.
+A fourth mapper wrapper, `mapWorkflowInsertErr`, carries the subject and definition that `ux_workflow_active` does not report.
+
+**Why.**
+Each maps a signal that exists and that a caller can act on differently.
+`ActiveWorkflowExistsError` cannot reuse `DuplicateNameError`: a subject reference is not a name, and the colliding pair is a subject and a definition rather than a name in a scope — bending it there is the plausible-but-wrong mapping decision 17 exists to refuse.
+`InvalidIdentifierError` cannot reuse `InvalidNameError`, whose message is hard-coded to "between 1 and 200 characters"; opaque identifiers cap at 500 (decision 29), so one message cannot state both limits truthfully.
+It carries a `Field` label because one type serves seven constraints across four different identifiers, following `FieldNotSetError`'s precedent that "which field" is genuine per-occurrence detail.
+
+`WorkflowNotFoundError` was not anticipated and is forced by an existing shape: `NotFoundError` carries one `uuid.UUID`, while this lookup key is a subject reference and a definition id.
+Reusing it would print a definition id while claiming to name a workflow.
+It wraps `ErrNotFound`, so coarse branching is unaffected.
+
+`VisitNotOpenError` is kept distinct from not-found deliberately, and the zero-row case is resolved with a follow-up read rather than collapsed.
+The two conditions have different causes — a stale view against a wrong id — and a developer reading a log needs to know which.
+If the diagnostic read itself fails, that error is returned instead: reporting a database failure as "already completed" would be a worse lie than losing the distinction.
+
+**Consequence — a correction to decision 34.**
+That decision argued a step id was redundant partly because the schema enforces "the requested action exists in the step."
+The constraint does enforce it, but `fk_step_visit_selected_action` is `DEFERRABLE INITIALLY DEFERRED`, so it fires at `COMMIT`, not at the statement that set the column.
+Left to the constraint, `Complete` would compute routing from an action belonging to another step and only fail at commit with a raw foreign-key error.
+So `getActionForStep` reads the action scoped to the step and returns `ActionNotAvailableError` directly, and the constraint is the backstop rather than the mechanism — the same relationship decision 20 established.
+Decision 34's conclusion is unchanged: a step id still detects nothing that a scoped action read does not.
+
+**Consequence — what is deliberately left unmapped.**
+`ux_step_visit_open` gets no mapper case.
+Two concurrent completions of one visit serialize on the row lock, so the loser's conditional `UPDATE` re-evaluates `completed_at is null`, matches nothing, and yields `VisitNotOpenError` — it never reaches an insert.
+The index can only fire if `Complete` ignores its rows-affected result, which is a library defect, and decision 17 built `UnmappedConstraintError` for exactly that.
+The earlier probe in decision 25 did produce that violation, but only because the probe script inserted unconditionally rather than checking rows-affected as `Complete` does.
+
+`ck_step_visit_completion`, `ck_step_visit_temporal`, and the three instance cascade-driver foreign keys are unmapped on the same grounds.
+The Engine writes all three completion columns in one statement and takes both timestamps from `now()`; and unlike decision 20's definition-side case, no concurrent delete can race the parent, because `Start` creates every parent in the same transaction as its children.
+A violation of any of them means the library is wrong, not the caller.
+
+The instance name and action CHECKs **are** mapped despite being unreachable through `Start`, which copies values the definition side already validated at the same limits.
+They are in the table so that a direct store call — or a future caller that writes these rows without going through `Start` — gets a domain error rather than a fail-loud.
+
+**Consequence — verification.**
+The helpers were exercised end to end against the migrated schema before being handed on: a run started, advanced through a routing transition, looped back to a step it had already visited, and terminated; then the history read back four visits with the correct step names in order, every one stamped with its completer, action name, and subject version token.
+Each new error was provoked from its own failing path, including that an unknown visit id yields `ErrNotFound` and **not** `ErrVisitNotOpen`, and that an over-long assignee yields `InvalidIdentifierError` with `Field == "assigneeId"` rather than `InvalidNameError`.
+That verification was deliberately not kept: the test suite for the instance side is designed in the Engine slice, against the Engine's own surface.

@@ -52,6 +52,28 @@ var (
 	// zero value instead of being decided with SetTo or Clear. See
 	// FieldNotSetError.
 	ErrFieldNotSet = errors.New("flowcore: params field not set")
+
+	// The instance-side sentinels, for the Engine.
+	//
+	// ErrDefinitionHasNoInitialStep: the definition names no entry step, so there
+	// is nowhere to start. Like the Create pre-flight sentinels it carries no
+	// fields — it maps no database rejection, and the only detail is the
+	// definition id the caller just supplied. It is checked after the definition
+	// is read rather than before, which is the only way it differs from them.
+	ErrDefinitionHasNoInitialStep = errors.New("flowcore: definition has no initial step")
+
+	// ErrActiveWorkflowExists is returned when a workflow is already running for
+	// a {subject, definition}. See ActiveWorkflowExistsError.
+	ErrActiveWorkflowExists = errors.New("flowcore: an active workflow already exists for this subject and definition")
+	// ErrVisitNotOpen is returned when the step visit being completed has already
+	// been completed. See VisitNotOpenError.
+	ErrVisitNotOpen = errors.New("flowcore: step visit is already completed")
+	// ErrActionNotAvailable is returned when the requested action does not belong
+	// to the step being completed. See ActionNotAvailableError.
+	ErrActionNotAvailable = errors.New("flowcore: action is not available on this step")
+	// ErrInvalidIdentifier is returned when an opaque identifier is empty or too
+	// long. See InvalidIdentifierError.
+	ErrInvalidIdentifier = errors.New("flowcore: invalid identifier")
 )
 
 // Entity labels carried on errors so a caller can name the offending kind.
@@ -60,6 +82,8 @@ const (
 	entityStatus             = "status"
 	entityStep               = "step"
 	entityAction             = "action"
+	entityWorkflow           = "workflow"
+	entityStepVisit          = "step visit"
 )
 
 // NotFoundError reports that a targeted row does not exist. Wraps ErrNotFound.
@@ -165,3 +189,91 @@ func (e *FieldNotSetError) Error() string {
 		e.Field)
 }
 func (e *FieldNotSetError) Unwrap() error { return ErrFieldNotSet }
+
+// WorkflowNotFoundError reports that no workflow exists for a {subject,
+// definition}. Wraps ErrNotFound, so a caller branching coarsely on
+// errors.Is(err, ErrNotFound) treats it alongside every other not-found.
+//
+// It exists because NotFoundError carries a single uuid, and this lookup key is a
+// subject reference and a definition id. Reusing NotFoundError would report a
+// definition id while claiming to name a workflow, which reads as a library bug
+// to anyone debugging from the message.
+type WorkflowNotFoundError struct {
+	SubjectReference     string
+	WorkflowDefinitionID uuid.UUID
+}
+
+func (e *WorkflowNotFoundError) Error() string {
+	return fmt.Sprintf("flowcore: no workflow for subject %q on definition %s",
+		e.SubjectReference, e.WorkflowDefinitionID)
+}
+func (e *WorkflowNotFoundError) Unwrap() error { return ErrNotFound }
+
+// ActiveWorkflowExistsError reports that a workflow is already running for this
+// subject and definition. Only one may be active at a time, so the subject
+// identifies a single run; finishing the existing one allows a new start. Wraps
+// ErrActiveWorkflowExists.
+//
+// This is not a DuplicateNameError: a subject reference is not a name, and the
+// pair that collided is a subject and a definition rather than a name in a scope.
+type ActiveWorkflowExistsError struct {
+	SubjectReference     string
+	WorkflowDefinitionID uuid.UUID
+}
+
+func (e *ActiveWorkflowExistsError) Error() string {
+	return fmt.Sprintf("flowcore: an active workflow already exists for subject %q on definition %s",
+		e.SubjectReference, e.WorkflowDefinitionID)
+}
+func (e *ActiveWorkflowExistsError) Unwrap() error { return ErrActiveWorkflowExists }
+
+// VisitNotOpenError reports that the step visit being completed is already
+// closed, which means the run advanced after the caller last looked at it. Wraps
+// ErrVisitNotOpen.
+//
+// It is deliberately distinct from NotFoundError, which a completely unknown
+// visit id yields instead: the remedies differ. This one says the caller's view
+// is stale and re-reading the state will show where the run actually is; a
+// not-found says the id itself is wrong.
+type VisitNotOpenError struct {
+	VisitID uuid.UUID
+}
+
+func (e *VisitNotOpenError) Error() string {
+	return fmt.Sprintf("flowcore: step visit %s is already completed; re-read the workflow state", e.VisitID)
+}
+func (e *VisitNotOpenError) Unwrap() error { return ErrVisitNotOpen }
+
+// ActionNotAvailableError reports that the requested action does not belong to
+// the step being completed. Wraps ErrActionNotAvailable.
+//
+// The action usually does exist — on some other step — so this is not a
+// not-found. The likely cause is a caller acting on a stale view that still
+// offers the actions of a step the run has since left.
+type ActionNotAvailableError struct {
+	ActionID uuid.UUID
+	StepID   uuid.UUID
+}
+
+func (e *ActionNotAvailableError) Error() string {
+	return fmt.Sprintf("flowcore: action %s is not available on step %s", e.ActionID, e.StepID)
+}
+func (e *ActionNotAvailableError) Unwrap() error { return ErrActionNotAvailable }
+
+// InvalidIdentifierError reports that an opaque identifier is empty or longer
+// than 500 characters. Wraps ErrInvalidIdentifier.
+//
+// Field names the column that failed, because one type serves every opaque
+// identifier the library stores — subject reference, subject version token,
+// assignee, completedBy — and which one is genuine per-occurrence detail. It is
+// kept separate from InvalidNameError because the two limits differ: a
+// human-facing name caps at 200, an opaque identifier at 500, so one message
+// cannot state both truthfully.
+type InvalidIdentifierError struct {
+	Field string
+}
+
+func (e *InvalidIdentifierError) Error() string {
+	return fmt.Sprintf("flowcore: %s must be between 1 and 500 characters", e.Field)
+}
+func (e *InvalidIdentifierError) Unwrap() error { return ErrInvalidIdentifier }
