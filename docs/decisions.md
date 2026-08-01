@@ -1475,3 +1475,70 @@ A comment explaining why an assertion is weak is not a substitute for an asserti
 This is the fifth toothless or invalid test in the iteration, and the first mutation used to investigate it was itself invalid — it broke SQL parameter type inference rather than the behaviour, so its failure proved nothing until casts were added.
 The recurring shape is a test that never reaches the condition it names.
 The mitigation adopted here, and worth repeating for anything load-bearing, is to break the code deliberately and confirm the test notices: it is what exposed this defect, what confirmed the fix, and what earlier established that the concurrency test genuinely races.
+
+---
+
+## 38. Closing iteration 1: definition update, embedded migrations, and a search_path bug
+
+**Context.**
+Checking iteration 1 against its own scope found two things the docs promised and the code did not do, and fixing the second exposed a defect in the migration setup that predates both.
+
+**Decision — `Catalog.UpdateWorkflowDefinition`.**
+`UpdateWorkflowDefinitionParams{Name string, InitialStepDefinitionID uuid.UUID}`, returning the definition's own row with `Statuses` and `Steps` left nil.
+`WorkflowDefinition.ToUpdate()` joins the other three read types.
+
+**Why.**
+The definition root had `Create`, `Get`, and `Delete` but no `Update`, so its two settable columns could not be changed after creation.
+That contradicts the doc directly: _Configure Workflow_ lists the entry step as something the Dev defines, and _Start Basic Workflow_ states "Caller can change the definition any time."
+The store helper already existed — `setInitialStepDefinition`, wired only to `Create` — so this exposed a capability rather than adding one.
+
+`InitialStepDefinitionID` is a plain `uuid.UUID` rather than `Nullable`, and decision 22's audit is why.
+The column is nullable in the schema, and clearing it makes a definition unstartable, which looks exactly like the `AssigneeID` hazard.
+But a zero `uuid.UUID` is not NULL, so it fails the entry-step foreign key and returns `CrossDefinitionError` — a forgotten field is caught by a constraint, which is decision 22's own test for when `Nullable` is unnecessary.
+Nothing is lost by requiring it: `Create` always sets an entry step, so a definition without one is reachable only by a DBA.
+
+Returning the row rather than the tree follows `docs/system-design.md`'s rule that an Update owns exactly its own row, and keeps it a single `UPDATE … RETURNING` with no transaction (decision 19).
+The asymmetry with `UpdateStep`, which does return its actions, is accepted: there the actions were already being refetched, whereas here it would mean reading a whole definition to report two changed columns.
+
+**Decision — `Migrate(ctx, pool)`, with goose as a real dependency.**
+
+**Why.**
+`docs/system-design.md` gave the embedded programmatic entrypoint as part of _why goose was chosen_, and it did not exist — no `embed` anywhere in the source, so a client had to install the CLI.
+
+The cost was measured rather than assumed.
+`go list -m all` reports 82 modules, which is misleading: with module-graph pruning only four non-stdlib modules actually compile in (goose, interpolate, go-retry, multierr), and `go.sum` stays at ten lines.
+The ClickHouse, Docker, and MySQL entries are test dependencies of dependencies and are never built.
+
+Exporting only the `embed.FS` and letting clients wire goose themselves was rejected, and not on convenience: decision 8 pinned the version-table name precisely because a client who also uses goose would otherwise share a table with FlowCore and corrupt both histories, and called the pinned invocation load-bearing enough to wire into the Makefile.
+Handing that back to the client, to be remembered from a README line, reintroduces the exact failure decision 8 guarded against.
+`Migrate` sets it for them.
+
+This does not reverse decision 14.
+That decision mentions goose being out of `go.mod` as a premise for a testing question, not a conclusion it argued; its reasoning was about keeping `TestMain` free of `PATH` assumptions and process-spawning, which is untouched — tests still run against a pre-migrated database.
+
+goose's package-level `SetTableName`/`SetBaseFS` are deliberately avoided in favour of the `Provider` API, because they are global: a library setting them would silently reconfigure a client that also uses goose in the same process.
+
+**Decision — the version table is `public.flowcore_goose_db_version`, qualified.**
+
+**Why.**
+This one is a live defect, found because `Migrate` was not idempotent: the first call succeeded and the second failed with `missing zero version migration`.
+
+The cause is that Postgres resolves `"$user"` in the default `search_path` to the connecting role.
+On a database whose role is named `flowcore` — which is what the project's own docker-compose creates — `current_schema()` is `public` before migration 00001 and **`flowcore` afterwards**, because that migration creates the schema.
+Probed directly: an unqualified `create table` lands in `public` before 00001 and in `flowcore` after it, on identical connection settings.
+
+So goose wrote its version table to `public` on the first run, failed to find it on the second, created a second empty one inside `flowcore`, and then could not reconcile the two.
+The suite database was found holding both tables, one with versions 0–3 and one with only 0.
+
+Worse than the confusion: a version table inside `flowcore` is destroyed by 00001's own down-migration, which drops the schema.
+
+Qualifying the name pins it regardless of role name or `search_path` — which is the rule decision 8 established for every other query in the library ("the library never relies on the client's `search_path`"), and the version table was the one thing left exempt from it.
+It cannot live inside `flowcore` instead, which is what decision 8's probe found: goose creates the version table before running any migration, when the schema does not exist yet.
+
+**Consequence.**
+Existing databases need no repair. The first migration run always happens before the schema exists, so their version table is already in `public` — the qualified name names the table they already have.
+
+The Makefile and the Go constant must stay in step; both now carry the qualified name.
+
+`Migrate` is covered by a test that creates a database of its own, because running it against the pre-migrated suite database would apply nothing and prove nothing.
+It asserts the schema arrives, that exactly one version table exists and it is in `public`, that goose's default table is absent, that a second call is a no-op, and that the pool still works afterwards — the last because `Migrate` opens and closes a `*sql.DB` over it.

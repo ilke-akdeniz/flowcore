@@ -42,6 +42,26 @@ func Clear[T any]() Nullable[T] { return Nullable[T]{set: true} }
 // ptr returns the value to bind to the SQL parameter: nil for a cleared column.
 func (n Nullable[T]) ptr() *T { return n.value }
 
+// UpdateWorkflowDefinitionParams are the settable columns on a definition itself.
+// It carries no statuses or steps: those are managed through their own Add/Update/
+// Delete methods, so an Update owns exactly the definition's own row.
+//
+// InitialStepDefinitionID is required, even though the column is nullable in the
+// schema. That NULL is a bootstrap artifact, not a state a definition may be left
+// in: Create must insert the definition row before the step it points at exists,
+// and stamps it later in the same transaction, so the column is null only
+// mid-write. Letting an update clear it would produce a definition that exists
+// and can never be started.
+//
+// It is a plain uuid rather than Nullable because a forgotten field fails loudly
+// here: uuid.Nil is not NULL, so it hits the entry-step foreign key and returns
+// CrossDefinitionError. Nullable is for a column like AssigneeID, where the same
+// mistake writes NULL and destroys the value in silence.
+type UpdateWorkflowDefinitionParams struct {
+	Name                    string
+	InitialStepDefinitionID uuid.UUID
+}
+
 // AddStatusParams are the settable columns when adding a status to a definition.
 type AddStatusParams struct {
 	Name string

@@ -475,7 +475,14 @@ It also has no "dirty schema" state to clear by hand after a failed migration, w
 Migrations run over database/sql via the github.com/jackc/pgx/v5/stdlib adapter, since goose is written against database/sql.
 This is scoped to the migration path only: the repository layer uses pgxpool and the native pgx API.
 Same driver, two façades, at different moments.
-goose's version table is named `flowcore_goose_db_version` (via goose's `-table` flag) so the library's migration history can never collide with a client that also uses goose for their own migrations.
+The embedded path is `Migrate(ctx, pool)`, which applies the migrations from application code; the CLI path is the Makefile.
+Both must name the same version table, so the name is a constant in Go and a variable in the Makefile rather than a literal in either.
+
+goose's version table is `public.flowcore_goose_db_version` so the library's migration history can never collide with a client that also uses goose for their own migrations.
+Both halves of that name are load-bearing.
+The prefix pins it against `search_path`: Postgres resolves `"$user"` to the connecting role, so on a database whose role is also named `flowcore`, `current_schema()` is `public` before migration 00001 runs and `flowcore` after it — because that migration creates the schema.
+An unqualified version table is therefore written to one schema and looked for in another between runs, and a version table that landed inside `flowcore` would be destroyed by 00001's own down-migration.
+It cannot simply live inside `flowcore` instead: goose creates the version table before running any migration, when the schema does not yet exist.
 
 Every stored text column carries a length cap.
 Opaque client-supplied identifiers (subject reference, subject version token, assignee, completedBy) cap at 500; human-facing names cap at 200.

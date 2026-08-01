@@ -62,6 +62,23 @@ type ActionDefinition struct {
 	TerminalWorkflowStatusDefinitionID *uuid.UUID
 }
 
+// ToUpdate returns the update params for this definition, pre-filled from its
+// current state. Note it does not carry statuses or steps: those are managed
+// through their own Add/Update/Delete methods, never through
+// UpdateWorkflowDefinition.
+//
+// A definition with no entry step yields a zero InitialStepDefinitionID, which
+// the update rejects rather than stores — the same loud failure a caller would
+// get for omitting it.
+func (w WorkflowDefinition) ToUpdate() UpdateWorkflowDefinitionParams {
+	params := UpdateWorkflowDefinitionParams{Name: w.Name}
+	if w.InitialStepDefinitionID != nil {
+		params.InitialStepDefinitionID = *w.InitialStepDefinitionID
+	}
+
+	return params
+}
+
 // ToUpdate returns the update params for this status, pre-filled from its
 // current state, so a caller can read-modify-write without copying fields by
 // hand.

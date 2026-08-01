@@ -371,3 +371,110 @@ func TestNotFoundCarriesEntityAndID(t *testing.T) {
 		t.Errorf("NotFoundError = {%q,%v}, want {%q,%v}", notFoundErr.Entity, notFoundErr.ID, entityStep, missing)
 	}
 }
+
+func TestUpdateWorkflowDefinition(t *testing.T) {
+	catalog := newCatalog(t)
+	ctx := context.Background()
+	definition, ids := twoStepDefinition("Original")
+	mustCreate(t, catalog, definition)
+
+	t.Run("renames and repoints the entry step", func(t *testing.T) {
+		updated, err := catalog.UpdateWorkflowDefinition(ctx, ids.workflow, UpdateWorkflowDefinitionParams{
+			Name:                    "Renamed",
+			InitialStepDefinitionID: ids.directorStep,
+		})
+		if err != nil {
+			t.Fatalf("UpdateWorkflowDefinition: %v", err)
+		}
+
+		if updated.Name != "Renamed" {
+			t.Errorf("name = %q, want Renamed", updated.Name)
+		}
+
+		if updated.InitialStepDefinitionID == nil || *updated.InitialStepDefinitionID != ids.directorStep {
+			t.Errorf("entry step = %v, want %v", updated.InitialStepDefinitionID, ids.directorStep)
+		}
+
+		// It owns its own row and nothing below it.
+		if updated.Statuses != nil || updated.Steps != nil {
+			t.Error("update must not load children")
+		}
+
+		got, err := catalog.Get(ctx, ids.workflow)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+
+		if len(got.Statuses) != 3 || len(got.Steps) != 2 {
+			t.Errorf("children changed: %d statuses, %d steps", len(got.Statuses), len(got.Steps))
+		}
+	})
+
+	t.Run("entry step from another definition is rejected", func(t *testing.T) {
+		other, otherIDs := twoStepDefinition("Other")
+		mustCreate(t, catalog, other)
+
+		_, err := catalog.UpdateWorkflowDefinition(ctx, ids.workflow, UpdateWorkflowDefinitionParams{
+			Name:                    "Renamed",
+			InitialStepDefinitionID: otherIDs.managerStep,
+		})
+		if !errors.Is(err, ErrCrossDefinition) {
+			t.Errorf("got %v, want ErrCrossDefinition", err)
+		}
+	})
+
+	t.Run("a zero entry step is rejected, not stored", func(t *testing.T) {
+		_, err := catalog.UpdateWorkflowDefinition(ctx, ids.workflow, UpdateWorkflowDefinitionParams{Name: "Renamed"})
+		if !errors.Is(err, ErrCrossDefinition) {
+			t.Errorf("got %v, want ErrCrossDefinition — a forgotten entry step must fail loudly", err)
+		}
+
+		// And the definition is still startable.
+		got, err := catalog.Get(ctx, ids.workflow)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+
+		if got.InitialStepDefinitionID == nil {
+			t.Error("the rejected update must not have cleared the entry step")
+		}
+	})
+
+	t.Run("unknown definition", func(t *testing.T) {
+		_, err := catalog.UpdateWorkflowDefinition(ctx, uuid.Must(uuid.NewV7()), UpdateWorkflowDefinitionParams{
+			Name: "x", InitialStepDefinitionID: ids.managerStep,
+		})
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("got %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("empty name", func(t *testing.T) {
+		_, err := catalog.UpdateWorkflowDefinition(ctx, ids.workflow, UpdateWorkflowDefinitionParams{
+			InitialStepDefinitionID: ids.managerStep,
+		})
+		if !errors.Is(err, ErrInvalidName) {
+			t.Errorf("got %v, want ErrInvalidName", err)
+		}
+	})
+
+	t.Run("ToUpdate carries the entry step forward", func(t *testing.T) {
+		stored, err := catalog.Get(ctx, ids.workflow)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+
+		params := stored.ToUpdate()
+		params.Name = "Renamed Again"
+
+		updated, err := catalog.UpdateWorkflowDefinition(ctx, ids.workflow, params)
+		if err != nil {
+			t.Fatalf("UpdateWorkflowDefinition via ToUpdate: %v", err)
+		}
+
+		if updated.InitialStepDefinitionID == nil || *updated.InitialStepDefinitionID != *stored.InitialStepDefinitionID {
+			t.Errorf("entry step = %v, want it carried forward as %v",
+				updated.InitialStepDefinitionID, stored.InitialStepDefinitionID)
+		}
+	})
+}

@@ -10,7 +10,7 @@ FLOWCORE_TEST_DSN ?= postgres://flowcore:flowcore@localhost:5432/flowcore_test?s
 
 # Distinct version table so FlowCore's migration history never collides with a
 # client that also uses goose for their own migrations.
-GOOSE_TABLE := flowcore_goose_db_version
+GOOSE_TABLE := public.flowcore_goose_db_version
 MIGRATIONS  := migrations
 
 .PHONY: test migrate-test migrate-test-down create-test-db

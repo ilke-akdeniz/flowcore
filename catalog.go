@@ -124,6 +124,22 @@ func (c *Catalog) Get(ctx context.Context, id uuid.UUID) (WorkflowDefinition, er
 	return definition, nil
 }
 
+// UpdateWorkflowDefinition replaces a definition's own columns — its name and
+// its entry step — and returns the stored row. Statuses and Steps are left nil:
+// this owns the definition's row and nothing below it.
+//
+// The entry step must be a step of this same definition, enforced by the entry-
+// step foreign key rather than by a pre-flight read; a step from elsewhere
+// returns CrossDefinitionError. That differs from Create, which checks the same
+// rule against its in-memory tree (ErrInitialStepNotInTree) because the steps it
+// is validating against do not exist in the database yet.
+//
+// Build the params with WorkflowDefinition.ToUpdate to carry the current entry
+// step forward when only the name is changing.
+func (c *Catalog) UpdateWorkflowDefinition(ctx context.Context, id uuid.UUID, p UpdateWorkflowDefinitionParams) (WorkflowDefinition, error) {
+	return updateWorkflowDefinition(ctx, c.pool, id, p)
+}
+
 // DeleteWorkflowDefinition removes a definition and, by cascade, all its
 // statuses, steps, and actions. Returns NotFoundError if no such definition.
 func (c *Catalog) DeleteWorkflowDefinition(ctx context.Context, id uuid.UUID) error {
