@@ -279,7 +279,7 @@ func (c *Catalog) DeleteAction(ctx context.Context, actionID uuid.UUID) error {
 // readDefinition assembles the deep tree from four queries on q. Shared by Get
 // (in a repeatable-read snapshot) and Create (reading its own writes before
 // commit). Every returned slice is non-nil: an empty slice means "loaded, none".
-func readDefinition(ctx context.Context, q querier, id uuid.UUID) (WorkflowDefinition, error) {
+func readDefinition(ctx context.Context, q txQuerier, id uuid.UUID) (WorkflowDefinition, error) {
 	definition, err := getWorkflowDefinitionRow(ctx, q, id)
 	if err != nil {
 		return WorkflowDefinition{}, err

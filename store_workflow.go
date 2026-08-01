@@ -53,8 +53,52 @@ func insertWorkflow(ctx context.Context, q querier, workflow workflowRow) error 
 	return mapWorkflowInsertErr(err, workflow.SubjectReference, workflow.WorkflowDefinitionID)
 }
 
+// getWorkflowIDBySubject resolves a {subject, definition} to the run it refers
+// to: the most recently started one.
+//
+// A pair accumulates a row per run over its lifetime — ux_workflow_active
+// constrains only open rows, so a finished run releases the pair for a new one.
+// Matching on the pair alone therefore matches history as well as the present,
+// and would silently return whichever row the planner produced first.
+//
+// "Most recently started" and "the open run, or the last finished one" are the
+// same rule rather than two: no run can start while another is open, so an open
+// run is necessarily the most recent. That gives the live run while one is in
+// flight, and the final state of the last run once none is — which is what both
+// Get Current Step and the history read want.
+//
+// The id tie-break matters only if two runs share a started_at to the microsecond;
+// UUIDv7 being time-ordered makes it the right direction.
+func getWorkflowIDBySubject(ctx context.Context, q querier, subjectReference string, workflowDefinitionID uuid.UUID) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := q.QueryRow(ctx,
+		`select id from flowcore.workflow
+		 where subject_reference = $1 and workflow_definition_id = $2
+		 order by started_at desc, id desc
+		 limit 1`,
+		subjectReference, workflowDefinitionID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, &WorkflowNotFoundError{
+			SubjectReference:     subjectReference,
+			WorkflowDefinitionID: workflowDefinitionID,
+		}
+	}
+
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	return id, nil
+}
+
 // getWorkflowState reads where a run stands: the workflow's own columns joined to
 // its open step visit and that visit's step.
+//
+// It is keyed on the workflow id rather than on the subject because Start and
+// Complete both hold an id already — Start generated it, Complete took it off the
+// visit it just closed — and because keying it on the subject would put the
+// most-recent rule in two places instead of one. Only GetState resolves, through
+// getWorkflowIDBySubject.
 //
 // The join to the visit and step is a left join because a finished run has no
 // open visit — that is the only shape in which "complete, no current step" is
@@ -63,7 +107,7 @@ func insertWorkflow(ctx context.Context, q querier, workflow workflowRow) error 
 // CurrentStep.Actions is left nil; the caller loads it with listActionsByStep.
 // That mirrors listStepDefinitionsByWorkflowDefinition, which likewise returns
 // steps with Actions unloaded.
-func getWorkflowState(ctx context.Context, q querier, subjectReference string, workflowDefinitionID uuid.UUID) (WorkflowState, error) {
+func getWorkflowState(ctx context.Context, q querier, workflowID uuid.UUID) (WorkflowState, error) {
 	var (
 		state          WorkflowState
 		visitID        *uuid.UUID
@@ -82,8 +126,8 @@ func getWorkflowState(ctx context.Context, q querier, subjectReference string, w
 		 left join flowcore.step_visit v
 		        on v.workflow_id = w.id and v.completed_at is null
 		 left join flowcore.step s on s.id = v.step_id
-		 where w.subject_reference = $1 and w.workflow_definition_id = $2`,
-		subjectReference, workflowDefinitionID).Scan(
+		 where w.id = $1`,
+		workflowID).Scan(
 		&state.ID,
 		&state.Name,
 		&state.SubjectReference,
@@ -98,10 +142,7 @@ func getWorkflowState(ctx context.Context, q querier, subjectReference string, w
 		&stepAssigneeID,
 		&enteredAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return WorkflowState{}, &WorkflowNotFoundError{
-			SubjectReference:     subjectReference,
-			WorkflowDefinitionID: workflowDefinitionID,
-		}
+		return WorkflowState{}, &NotFoundError{Entity: entityWorkflow, ID: workflowID}
 	}
 
 	if err != nil {

@@ -445,7 +445,20 @@ IDs are UUIDv7, application-generated in Go before insert (`github.com/google/uu
 App-generated ids let the aggregate create assign every id up front, so an action can reference a step declared later in the same transaction with no `RETURNING` round-trips, and let a client store a stable id that is identical across dev, staging, and prod.
 
 The store functions take a `querier` — a small unexported interface (`Exec`/`Query`/`QueryRow`) satisfied by both `*pgxpool.Pool` and `pgx.Tx` — so the same helper composes into autocommit or into a transaction.
-Transaction control lives in exactly one place: only the aggregate create (and later the Engine's own methods) calls Begin/Commit; helpers never begin a transaction.
+Transaction control lives only in the service types, never in the store: `Catalog.Create` and `Catalog.Get`, and `Engine.Start`, `Engine.CompleteStep`, and `Engine.GetState`.
+Helpers never begin a transaction — `Begin` is deliberately absent from the `querier` interface, so a helper is incapable of it rather than merely discouraged.
+
+A `querier` parameter states that a helper _composes_ into either; it states nothing about atomicity, and cannot, because a single statement is atomic on its own.
+Helpers that issue several statements are a different case: run on the pool, each statement commits independently, so a failure part-way leaves state no caller intended, and multi-query reads tear.
+Those take `txQuerier` instead — `querier` plus `Conn`, which `pgx.Tx` has and `*pgxpool.Pool` does not — so passing a pool fails to compile rather than silently corrupting a run.
+`Begin` is absent from that interface too: it lets a helper _require_ a transaction, never start one.
+The reading rule follows from this: a `querier` parameter means "ask my caller", a `txQuerier` parameter means "a transaction is already open", and only the five service methods above can be the answer.
+
+The isolation level is chosen per site rather than set once, and the two Engine write paths deliberately differ.
+`Start` is `RepeatableRead`, because it reads a definition over four queries and must not snapshot a definition that never existed as a whole; it only inserts rows whose ids it generated, so it cannot hit a serialization failure.
+`Complete` is `ReadCommitted`, because its conditional update must block and re-check rather than abort: that is what turns a concurrent completion into a typed `VisitNotOpenError` instead of a `40001` the library has no answer for.
+`Catalog.Get` and `Engine.GetState` are `RepeatableRead` plus `ReadOnly`, which cannot fail to serialize.
+The other Catalog methods are single statements and take no transaction at all.
 The idiom at every transaction site is `Begin` then an immediate `defer func() { _ = tx.Rollback(ctx) }()`, `Commit` at the end — the post-commit rollback returns `pgx.ErrTxClosed` and is ignored, which is what guarantees no leaked connection on any error path.
 
 Errors surface as a small typed taxonomy over the DB's rejections, mapped centrally: constraint violations are keyed on SQLSTATE plus the explicitly-named constraint, and because a referencing insert and a referenced delete are byte-identical at the FK level, the mapping is split by operation intent into a write path and a delete path.

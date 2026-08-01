@@ -1340,3 +1340,138 @@ They are in the table so that a direct store call — or a future caller that wr
 The helpers were exercised end to end against the migrated schema before being handed on: a run started, advanced through a routing transition, looped back to a step it had already visited, and terminated; then the history read back four visits with the correct step names in order, every one stamped with its completer, action name, and subject version token.
 Each new error was provoked from its own failing path, including that an unknown visit id yields `ErrNotFound` and **not** `ErrVisitNotOpen`, and that an over-long assignee yields `InvalidIdentifierError` with `Field == "assigneeId"` rather than `InvalidNameError`.
 That verification was deliberately not kept: the test suite for the instance side is designed in the Engine slice, against the Engine's own surface.
+
+---
+
+## 36. The Engine: isolation chosen per path, and one lookup that resolves "which run"
+
+**Context.**
+The last slice of iteration 1: `Start`, `Complete`, `GetState`, `GetHistory`, and the tests.
+Two questions turned out to matter more than the orchestration itself.
+
+**Decision — isolation differs between the two write paths.**
+`Start` is `RepeatableRead`.
+`Complete` is `ReadCommitted`.
+`GetState` is `RepeatableRead` plus `ReadOnly`; `GetHistory` takes no transaction.
+
+**Why.**
+The instinct is one policy for both write paths, and it is wrong in both directions.
+
+`Start` calls `readDefinition`, which is four separate queries.
+Under read committed they can straddle a concurrent `Catalog` edit and freeze a definition that never existed as a whole — statuses from before an edit, steps from after.
+Decision 12 took repeatable read for exactly this exposure on `Catalog.Get`, and the damage here is strictly worse: `Get` returns one bad answer, while `Start` writes one permanently into a run that principle 2 then treats as the source of truth.
+Repeatable read costs nothing here because Postgres raises `40001` on write-write conflicts against rows another transaction updated, and `Start` only inserts rows whose ids it just generated.
+
+`Complete` is the opposite case, and repeatable read there would be a defect.
+Both concurrent completions target the same visit row.
+Probed both ways: under read committed the loser blocks, re-evaluates `completed_at is null` against the committed row, matches nothing, and returns `UPDATE 0` — which becomes `VisitNotOpenError`, the error decision 34's whole visit-id design exists to produce.
+Under repeatable read the identical race raises `40001`, which has no member in the taxonomy and no retry logic behind it — the failure decision 19 refused to admit through the update path, arriving by a different door.
+
+So the correct isolation is not a property of "write path" but of what each transaction must survive: `Start` must not see a moving definition, `Complete` must not abort when it can recheck.
+
+**Decision — one lookup resolves which run a subject refers to.**
+`getWorkflowIDBySubject` orders by `started_at desc, id desc limit 1`.
+`getWorkflowState` is keyed on the workflow id.
+`GetState` and `GetHistory` both resolve through the lookup; `Start` and `Complete` already hold an id.
+
+**Why.**
+This corrects a defect shipped in decision 35.
+`ux_workflow_active` constrains only open rows, so a finished run releases its `{subject, definition}` pair and a new run may take it — meaning the pair accumulates one row per run over its lifetime.
+`getWorkflowState` matched on the pair alone and used `QueryRow`, which silently takes the first row.
+Probed: three runs for one pair, and the query returned a run that finished two days earlier while a live run sat at its first step.
+
+The rule chosen is "the most recently started run", and it is worth recording that this is **one** rule rather than a choice between two.
+No run can start while another is open, so an open run is necessarily the most recent — the same `ORDER BY` therefore yields the live run while one is in flight, and the final state of the last run once none is.
+That is what both flows need: "what step is doc-123 on?" answers with the live run, and reading state immediately after completing a run still shows the run just finished rather than a not-found.
+
+Keying the projection on the id rather than the subject follows from this: the rule then lives in exactly one function.
+The alternative was a second projection query keyed by subject, which would have duplicated a fifteen-line `SELECT` that must stay in lockstep with `WorkflowState` forever — where forgetting one is a silent partial projection rather than a compile error.
+
+**Consequence — how the defect escaped the previous slice.**
+The scratch verification did create a second run for the same subject, but only as its final step, and never read state afterward.
+The assertion existed; it was not pointed at the thing it claimed to cover.
+That is the fourth invalid test of this iteration, all the same shape, and the pattern is worth naming: a test that passes because it never reached the condition is indistinguishable from one that passes because the code is right.
+`TestGetStateReturnsTheLiveRunNotAnOldOne` covers it explicitly now.
+
+**Consequence — the concurrency test was verified by breaking the code.**
+`TestCompleteIsSafeUnderConcurrency` passed on first run, which proves little: if the two goroutines do not overlap it degenerates into the sequential double-completion case that is already covered.
+A release barrier was added so both calls are in flight together, and the test was then run against a deliberately broken `Complete` — isolation flipped to repeatable read — where it failed 8 times out of 8 with `40001`.
+That establishes both that the goroutines genuinely race and that the isolation decision is load-bearing rather than decorative.
+Fifteen runs under `-race` against the correct code are stable.
+
+**Consequence — documentation.**
+`docs/system-design.md`'s claim that "transaction control lives in exactly one place" is no longer true and was reworded to name the five sites and their isolation levels, since the per-site choice is now itself a design decision rather than a default.
+
+`ErrDefinitionHasNoInitialStep` finally has a producer.
+Its test has to clear `initial_step_definition_id` with raw SQL, because `Catalog` cannot produce that state through its own API — decision 6 made the column nullable only so the row can be inserted before its steps exist, and the aggregate create always stamps it.
+The sentinel guards a state reachable by a DBA or a future migration, not by the library's own surface.
+
+---
+
+## 37. `txQuerier`, and two defects a review caught
+
+**Context.**
+A review of the Engine slice raised three things: that `Engine.Complete` is misnamed, that the terminal-status assertion in its test proves nothing, and — following from a question about how a reader can tell whether a helper runs in a transaction — that nothing in the code answers that question.
+Two were defects. The third was a design gap this entry closes.
+
+**Decision — `txQuerier` for helpers that need atomicity.**
+
+```go
+type txQuerier interface {
+	querier
+	Conn() *pgx.Conn
+}
+```
+
+`readDefinition`, `readState`, `writeSnapshot`, and `advance` take it.
+Everything else keeps `querier`.
+
+**Why.**
+The question that prompted it was whether seeing a `querier` parameter is enough to know a helper runs in a transaction.
+It is not, and that is by design: `querier` says a helper _composes_ into either a pool or a transaction, which is decision 10's whole point.
+But that leaves two materially different kinds of helper wearing the same signature.
+A single-statement helper is atomic by itself and correct either way.
+A multi-statement helper is correct **only** inside a transaction, and passing it the pool compiles, runs, and is silently wrong — `writeSnapshot` would leave a workflow with steps but no opening visit, `advance` could close a step visit and fail to open its successor, leaving a run with no open step and no way to advance ever again.
+
+There was no convention marking the difference, and the doc comments were inconsistent: only `readState` mentioned it.
+So the answer to "how do I know?" was "read the body, count the statements, then check every caller" — which is not a heuristic, it is an invitation to get it wrong.
+
+`Conn` is the discriminator for a mechanical reason rather than a meaningful one: `pgx.Tx` has it, `*pgxpool.Pool` does not.
+Verified by compiling a call that passes the pool: `cannot use e.pool (variable of type *pgxpool.Pool) as txQuerier value in argument to readState: *pgxpool.Pool does not implement txQuerier (missing method Conn)`.
+`Commit` or `Rollback` would discriminate equally well and were rejected because a helper holding either could end the caller's transaction; `Conn` is inert.
+
+This does not reverse decision 10.
+`Begin` remains absent from both interfaces, so a helper still cannot start a transaction — `txQuerier` only lets one require that a caller already did.
+It narrows decision 1's recorded consequence that "discipline moves from the compiler to the author" for the one case where the failure is silent data corruption rather than a mistake the tests would catch.
+
+**Decision — `Engine.Complete` is renamed `Engine.CompleteStep`.**
+
+**Why.**
+`Start` and `GetState` are workflow-scoped, so the implicit noun is right for them.
+`Complete` is not: it completes a step, and the implicit noun makes it read as completing the run.
+The package made that worse rather than better, since `completeWorkflow` sits beside it and _does_ end the run — so the shorter, more prominent name was the one that did not mean what it appeared to.
+The documented vocabulary had already settled this and was not followed: `system-design.md` names the flow "Complete Step" twice, the diagram says `complete step`, and `CLAUDE.md`'s iteration-1 scope says `complete step`.
+`CompleteVisit` was rejected: mechanically precise, but it leaks an internal noun into the public API and matches no documented flow.
+
+Earlier entries still say `Complete`; they are left as written, on the same footing as decision 11's `Definitions` → `Catalog` rename.
+
+**Decision — `twoStepDefinition` gains distinct terminal statuses.**
+
+**Why.**
+The fixture declared one status, `"in progress"`, and pointed both terminal actions at it, so a run read `"in progress"` before _and_ after finishing.
+The assertion could not distinguish a correctly stamped terminal status from one never written.
+Established by mutation rather than by inspection: `completeWorkflow` was changed to stamp `completed_at` but never the status columns, and **the entire suite passed**.
+Nothing anywhere covered terminal-status stamping.
+
+The fixture now carries `"in progress"`, `"approved"`, and `"rejected"`, with the terminating actions pointing at the latter two — which is also the example `system-design.md` uses.
+Re-running the same mutation now fails with `terminal status = "in progress", want "rejected"`.
+`catalog_test.go`'s tree-shape assertion moved from one status to three; nothing else depended on the old shape.
+
+**Consequence.**
+The comment `// twoStepDefinition's terminal action ends in its only status` is worth recording as the thing that should have stopped this.
+The fixture's weakness was noticed at the time and written down instead of fixed, which converted a hole into a hole with a justification attached.
+A comment explaining why an assertion is weak is not a substitute for an assertion that is not.
+
+This is the fifth toothless or invalid test in the iteration, and the first mutation used to investigate it was itself invalid — it broke SQL parameter type inference rather than the behaviour, so its failure proved nothing until casts were added.
+The recurring shape is a test that never reaches the condition it names.
+The mitigation adopted here, and worth repeating for anything load-bearing, is to break the code deliberately and confirm the test notices: it is what exposed this defect, what confirmed the fix, and what earlier established that the concurrency test genuinely races.

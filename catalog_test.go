@@ -28,7 +28,7 @@ func TestCreateAndGetDeepTree(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 
-	if len(got.Statuses) != 1 || len(got.Steps) != 2 {
+	if len(got.Statuses) != 3 || len(got.Steps) != 2 {
 		t.Fatalf("tree shape: %d statuses, %d steps", len(got.Statuses), len(got.Steps))
 	}
 
