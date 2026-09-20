@@ -8,6 +8,13 @@ services:
       POSTGRES_DB: flowcore
     ports:
       - "5432:5432"
+    # Lets `docker compose up --wait` block until Postgres accepts connections,
+    # rather than merely until the container is running. `make up` relies on it.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowcore -d flowcore"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
     volumes:
       - flowcore-pgdata:/var/lib/postgresql/data
 
