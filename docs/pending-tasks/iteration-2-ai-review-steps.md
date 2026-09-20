@@ -2,17 +2,21 @@
 
 ## What this file is
 
-Source material for iteration 2, gathered in conversation on 2026-09-20, before any design work started.
+Iteration 2's working file.
+It began as source material gathered before design started.
+The design is now settled, and what remains here is the plan and its progress, a scenario to test the build against, and reference material.
 
-**Nothing here is ratified.**
-Design decisions land in `docs/system-design.md` and `docs/decisions.md` first, and the owner resolves them.
-Claims are tagged so their weight is visible:
+**The settled design lives in `docs/decisions.md` (39 to 43) and `docs/system-design.md`, not here.**
+This file points at them rather than restating them, so each fact has one home.
 
-- **[repo]** — already recorded in the repository's docs or code.
-- **[owner]** — a position the owner stated in that conversation; not yet written into the design docs.
-- **[idea]** — an unratified suggestion from the conversation, offered as a starting point to argue with.
+Claims that remain are tagged so their weight is visible:
+
+- **[repo]** — recorded in the repository's docs or code.
 - **[agreed]** — settled with the owner and binding on this iteration.
-  The plan below is the only such section.
+- **[idea]** — unratified, offered as a starting point to argue with.
+
+The `[owner]` tag is retired.
+Everything it marked was either settled into a decision or rejected, and both outcomes are in `decisions.md`.
 
 ## The plan — agreed 2026-09-20
 
@@ -20,7 +24,7 @@ Claims are tagged so their weight is visible:
 Follow it in order.
 If the work suggests a different sequence, or a phase turns out to be unnecessary, stop and say so — drifting from it silently is the failure this section exists to prevent.
 
-### Phase 0 — Frame the slice
+### Phase 0 — Frame the slice — **done 2026-09-20**
 
 1. **Grill advisory versus deciding**, following *Grilling* in `CLAUDE.md`.
    That question alone, before anything else.
@@ -31,7 +35,7 @@ If the work suggests a different sequence, or a phase turns out to be unnecessar
 3. **Write `# Iteration 2 Scope` into `system-design.md`**, mirroring the iteration 1 section — flows in scope, everything else explicitly out.
    Move iteration 2 to *In progress* in `status.md`; that is the owner's call.
 
-### Phase 1 — Decisions, one at a time, design doc first
+### Phase 1 — Decisions, one at a time, design doc first — **done 2026-09-20**
 
 Each decision lands in `system-design.md` (what it is), then `decisions.md` from 39 (why, and the options rejected).
 Don't introduce ADR files — `decisions.md` is already the project's format, and a second one would split the authority.
@@ -42,7 +46,7 @@ Don't introduce ADR files — `decisions.md` is already the project's format, an
 6. **Trigger and pickup** — poll, client-emit, or explicitly deferred with a note in this file rather than built.
 7. **Failure and retry semantics** — the first slice that has to answer this, because the executor is fallible.
 
-### Phase 2 — Build, in iteration 1's order
+### Phase 2 — Build, in iteration 1's order — **next**
 
 Iteration 1's commit sequence is the template; reuse it rather than inventing one.
 
@@ -59,126 +63,44 @@ Small reviewable commits, with `/code-review` before each.
 13. Refresh `code-map.md`, and note anything `architecture.md` now misstates.
 14. Propose *Complete*; the owner decides.
 
-### One dependency to respect
+### One dependency to respect — resolved
 
-**Step 4 gates step 5.**
-
-Under the deciding shape, the agent completes its own visit and its rationale goes in that visit's comment — atomic, and the shape the comment field was argued for.
-Under the advisory shape, the executor produces findings *before* a human completes the visit, so a comment writable only as part of the completion stamp cannot hold them.
-Advisory therefore forces either a second home for findings, or a comment writable outside completion — and the second breaks the atomicity that made the field defensible.
-
-The grilling in step 1 should carry this as a pressure point: does the preferred step shape leave the agent's findings anywhere legal to live?
+**Step 4 gated step 5, and it held.**
+The step shape was settled first (decision 39), which is what made the remark's shape decidable: because the agent completes its own visit, its rationale goes in that visit's own completion stamp, and no write outside completion is needed.
+Had the advisory shape won, a remark writable only at completion could not have held an executor's findings, and the field would have needed a different design.
 
 ## Where iteration 2 starts from
 
-**[repo]** `system-design.md` opens by saying the library is "designed to support human-in-the-loop AI review steps (iteration 2)", and iteration 1 explicitly excludes them, along with synchronization, failure handling, and scale.
+**[repo]** `system-design.md` now carries a `# Iteration 2 Scope` section, which is the authoritative statement of what is in and out.
 
-**[repo]** `system-design.md` already carries an increment 2 candidate, quoted in full because it is the closest thing to a prior decision:
-
-> automated advisory step type (findings + human override + audit)
-> a step type exists whose executor is external, async, fallible, and advisory rather than deciding.
-> flow idea: "AI director pre-check" -> finds 7 issues and shows warnings -> salesperson reviews the issues and makes changes or overrides the warnings...
+**[repo]** The increment 2 candidate note that preceded it — "advisory rather than deciding" — is **superseded by decision 39**, which found that advisory is not a step type but graph topology.
+The note is left in place rather than deleted, and the scope section records the supersession.
 
 **[repo]** The Engine's surface today is `Start`, `CompleteStep`, `GetState`, `GetHistory`.
-The worklist flow (`Get Assigned Steps`) is described in the design doc's flows but has no method — the data to serve it exists as `assignee_id` on `step_visit`.
+Iteration 2 adds the assignee-keyed worklist and reassignment.
 
 **[repo]** `SubjectVersionToken` is recorded and stamped, never interpreted or validated by the library; the client compares it.
 
-**[repo]** `docs/decisions.md` ends at decision 38, so iteration 2's decisions continue from 39.
+**[repo]** `docs/decisions.md` now ends at decision 43, so iteration 3's decisions continue from 44.
 
-**Failure handling moves into play.** The increment 2 note calls the executor *fallible*, and iteration 1 put failure handling out of scope.
-Whatever shape the step takes, iteration 2 is the first slice that has to say what happens when the thing completing a visit crashes, times out, or never answers.
+## What was settled
 
-## The central open question: advisory or deciding?
+Phase 0 and Phase 1 were resolved by interview on 2026-09-20.
+The reasoning, the rejected alternatives, and the owner's own words are recorded as decisions 39 to 43 — this table is an index, not a summary.
 
-Two shapes were discussed, and they are genuinely different designs.
-This is the first thing to settle, because most of the other questions resolve differently under each.
+| Question | Resolution | Decision |
+| --- | --- | --- |
+| Advisory or deciding? | A false dichotomy. The agent is an ordinary actor that completes its own visit; advisory versus deciding is per-definition graph topology. | 39 |
+| Can an agent annotate a human's open visit instead? | No — rejected on ordering races, invisible failure, no row, and nothing recorded on a loop. | 39 |
+| Parallel steps and joins? | Sequential only, recorded as a deliberate non-capability with a migration path sketched. | 40 |
+| Where do findings and rationale live? | A `remark` on the visit: optional, part of the atomic completion stamp, immutable in effect, capped at 3000 characters. | 41 |
+| Does FlowCore hold prompts or call the model? | Never. It holds only a subject reference, so it cannot build a prompt without storing subjects or calling back into the client. | 43 |
+| How is agent work triggered? | It is not — the client already holds `CurrentStep.AssigneeID` in the response that opened the step. The problem dissolved. | 43 |
+| Agent retry and failure policy? | The client's own job queue. FlowCore grows no retry, backoff, or timeout semantics. | 43 |
+| Worklist? | In scope, assignee-keyed half only. | 42 |
+| Reassignment? | In scope. The worklist is what gives it a caller. | 42 |
 
-**Shape A — advisory. [repo]** The step's executor produces findings and does not choose the route.
-A human sees the findings and decides, possibly overriding them.
-This is what the increment 2 candidate note describes, and it is the older, more considered position.
-
-**Shape B — deciding. [idea]** The step is an ordinary step whose `assignee_id` is an opaque agent identifier such as `agent:brand-check@v3`.
-A runner outside the library notices the open visit, calls the model, and calls `CompleteStep` with `completedBy: "agent:brand-check@v3"` and a selected action.
-The Engine never awaits a model, holds no prompt, and stores no model output beyond the selected action.
-
-The two are not exclusive — a confidence threshold could route between them (see below) — but the default shape should be chosen deliberately rather than falling out of the implementation.
-
-Under Shape A the open questions become: does the advisory executor's run occupy a visit at all, or does it attach to the human's visit?
-If it attaches, what writes it, and when?
-
-## Why the integration may need no new mechanism
-
-**[idea]** The reason an agent integrates cleanly is structural, not lucky.
-`assignee_id` and `completed_by` are opaque by principle — the library already cannot tell an agent from a person and was never permitted to try.
-So `agent:brand-check@v3` needs no new column, no agent step type, no flag.
-An agent is an actor because every actor is a string the library refuses to interpret.
-
-Two consequences worth testing against the real design:
-
-**Confidence routing is already expressible. [idea]** "Pass if confident, otherwise send it to a human" is two actions on one step pointing at different next steps.
-The executor picks the edge.
-No new structure.
-This is also the natural bridge between Shape A and Shape B.
-
-**Retry safety may already exist. [idea]** An at-least-once runner that crashes after completing but before acknowledging will retry, and the partial unique index over open step visits rejects the duplicate in the database.
-The mechanism built for two humans double-clicking would cover flaky agent infrastructure for free.
-Worth verifying against the actual index before relying on it.
-
-## Open design questions
-
-**1. Nothing notices.**
-FlowCore has no outbound anything — no events, no webhooks, no queue.
-Something must observe that a visit assigned to an agent is open.
-Options raised: the runner polls, or the client emits on `CompleteStep`.
-The worklist query would make polling cheap, and does not exist yet.
-By the project's own no-speculative-structure rule, none of this should be built until iteration 2 actually forces it — but iteration 2 probably does force it, which is what makes it a real question now rather than a deferred one.
-
-**2. Failure handling.**
-The executor is fallible.
-A human who cannot decide simply leaves the visit open, and that is fine.
-An agent that errors also leaves it open, and something must decide whether to retry, escalate to a human, or surface a stuck run.
-Note that "leave it open" is already a valid state — the question is who notices and what they do.
-
-**3. Where the model's output lives.**
-FlowCore is not a document store, and the agent's full report — findings, confidence, model version, bounding boxes — is bulk output that does not belong in it.
-But the *reason for a decision* is different from a *report about the subject*.
-See the comment field below; the line proposed was **the reason comes in, the report stays out**.
-
-**4. The visit comment field.**
-See the next section.
-This is arguably a prerequisite: **[owner]** most integrations will be an agent doing work and then posting results to FlowCore along with a comment.
-
-**5. The worklist.**
-Designed in the flows, unbuilt.
-Both the agent-pickup question and the human-queue question run through it.
-
-## The visit comment field
-
-**[owner]** A free-text comment or note on `StepVisit` is needed regardless of agents.
-"I approved this, but…" and "I approved this because…" are ordinary workflow-engine concerns with a caller today and no agent anywhere in sight.
-
-**[owner]** It does not violate the not-a-document-store boundary.
-That boundary refuses to hold the *workflow subject* — the artwork, the expense form.
-A rationale for a decision FlowCore itself owns is an attribute of that decision, sitting beside `completed_by` and `selectedAction` with the same rhythm: written once at completion, never rewritten.
-
-**[owner]** It also removes a failure mode rather than mitigating one.
-If the decision and its reason are stamped in the same transaction, there is no write-ordering convention to get right, no retention mismatch between two systems, and no orphaned decision whose rationale was lost.
-Keeping decision data outside the engine because the engine lacks somewhere to put it manufactures a second source of truth for something FlowCore already owns.
-
-**[owner]** A workflow-shaped thing living outside FlowCore and integrating back — a person approving and annotating in another system — should not happen.
-If it does happen for a good reason, whoever designs that has to decide what to do with FlowCore's note field and who is the source of truth for what.
-
-Open questions for that design conversation **[idea]**:
-
-- **Does it join the atomic completion stamp?**
-  Probably as an optional member: completion without a note is allowed, a note without a completion is not — so `completed_at` / `completed_by` / `selectedAction` / comment stay one indivisible write and a half-stamped visit remains unrepresentable.
-- **Is it immutable?**
-  The same reasoning that makes `completed_by` immutable applies.
-  Clients will ask to edit it; the answer being "no" is what makes it evidentiary.
-- **One note, or many?**
-  One note at completion is the line that stops this becoming a comment system.
-  Threading and attachments are the slope to avoid.
+**What iteration 2 builds:** the worklist query and method, reassignment, and the `remark` column — and no step-type structure at all, because an agent was always expressible as an opaque assignee.
 
 ## Positioning: what iteration 2 is not
 
@@ -262,16 +184,18 @@ An agent framework can produce the judgment; these are what the engine contribut
 
 ## Guardrails carried into iteration 2
 
-**[owner]** Agent-platform cookbooks are a source of ideas, not a specification.
+**[agreed]** Agent-platform cookbooks are a source of ideas, not a specification.
 Do not design FlowCore around one example integration.
 Evolve it toward the shape that serves the most integration shapes.
 
-**[owner]** Workflow-shaped behaviour should not live outside FlowCore and integrate back in.
+**[agreed]** Workflow-shaped behaviour should not live outside FlowCore and integrate back in.
 That is asking for trouble.
 
-**[repo]** No speculative structure still applies.
+**[repo]** No speculative structure still applies, and it applied during Phase 1.
 A capability earns its place this slice only if it is the correctness condition of something being built now.
-The trigger mechanism, the worklist, and the comment field each need that test applied individually — some will pass it for iteration 2, and the ones that do not should be deferred with a note here rather than built.
+The test was run on each candidate individually: the trigger mechanism failed it and dissolved entirely (decision 43), agent retry policy failed it and stayed with the client (decision 43), and `step_visit.step_definition_id` with its two indexes failed it and stays deferred (decision 42).
+The worklist, reassignment, and the remark passed, each on a caller that exists today.
+Apply the same test in Phase 2 to anything the build suggests adding.
 
 ## References — cookbook examples we looked at
 

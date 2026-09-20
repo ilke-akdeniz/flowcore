@@ -1542,3 +1542,235 @@ The Makefile and the Go constant must stay in step; both now carry the qualified
 
 `Migrate` is covered by a test that creates a database of its own, because running it against the pre-migrated suite database would apply nothing and prove nothing.
 It asserts the schema arrives, that exactly one version table exists and it is in `public`, that goose's default table is absent, that a second call is a no-op, and that the pool still works afterwards — the last because `Migrate` opens and closes a `*sql.DB` over it.
+
+---
+
+## 39. An AI review step is an ordinary step, and "advisory" is graph topology
+
+**Context.**
+`docs/system-design.md` carried an increment 2 candidate describing "a step type ... whose executor is external, async, fallible, and advisory rather than deciding."
+A design conversation had independently assumed the opposite shape — the agent as an assignee that completes its own visit.
+The two are incompatible, which is why the iteration 2 plan made settling them its first step.
+
+**Options.**
+A1 — the agent occupies its own step, and that step's actions converge on a human step.
+B — the agent occupies its own step, and its actions diverge, so its choice routes the run.
+A2 — the agent occupies no step at all; it annotates the human's open visit with findings, and the human completes.
+
+**Decision.**
+The agent is an ordinary actor with an opaque `assignee_id`, and completes its own visit.
+A1 and B are not library alternatives: they are the same mechanism, distinguished only by whether the step's actions share a `next_step_id`.
+Advisory versus deciding is a per-definition configuration choice, invisible to the library.
+
+**Why.**
+The question changed shape once the schema was read, and that is the part worth recording.
+
+`ux_step_visit_open` permits at most one open visit per run, so an agent and a human cannot hold open work on the same run simultaneously.
+Whatever the agent does is therefore either *before* the human's visit opens, or *inside* it — and "inside it" is A2, the only genuinely distinct shape.
+
+`ck_step_visit_completion` forces `completed_at`, `completed_by` and `selected_action_id` to be set together, so a visit cannot close without selecting an action.
+An agent step that "does not decide" still closes with one; the advisory quality lives in where those actions point, not in the visit mechanics.
+Nothing in the `action` table stops several actions of one step sharing a `next_step_id`, which is what makes convergence expressible without a new construct.
+
+A2 was rejected on four counts.
+It reintroduces an ordering race the schema cannot catch, because an agent holding nothing cannot lose to a human who completes first.
+It makes failure invisible: a crashed agent leaves the human's visit open, which is indistinguishable from a check that found nothing or has not run.
+It gives the agent's run no row, so there is no `entered_at`, no `completed_by`, and no record of which agent version acted.
+And it records nothing on a loop, where A1/B writes a second visit and makes "how often does a re-check still fail" a query.
+The owner's answer was that "option 3 is eliminated due to very obvious reasons."
+
+Two capabilities the increment 2 note asked for need no mechanism at all.
+**Human override** is the human completing the agent's visit, permitted because nothing requires the completer to be the assignee — the property `system-design.md` already states as "does not decide whether the completing actor was permitted to act."
+**Terminating a superseded agent run** is the existing stale-visit rejection: the agent's late `CompleteStep` finds the visit closed and is refused, so the race resolves in the database.
+
+**Consequence.**
+Iteration 2 builds no step-type structure — no step kind, no flag, no column, no executor interface.
+The capability shipped in iteration 1 and went unnoticed, because `assignee_id` was always opaque.
+
+The increment 2 note is superseded rather than deleted, and `# Iteration 2 Scope` records the supersession in place, following this log's own append-only habit.
+
+---
+
+## 40. Sequential only: no parallel steps, no joins
+
+**Context.**
+Raised by the owner against decision 39's shape: an agent step and a human step look sequential and blocking, with no way to run an AI check and a manager review at once and terminate the AI step when the human decides.
+The owner named the stake correctly — that this could be very difficult to reverse in a later iteration.
+
+**Options.**
+Add fork and join now.
+Defer, recording the non-capability and a migration path.
+Reject permanently.
+
+**Decision.**
+Sequential only, recorded as a deliberate non-capability with its migration path sketched but not designed.
+
+**Why.**
+It is not supported today by construction rather than omission: two open visits on one run is a unique violation of `ux_step_visit_open`.
+It had also never been considered — a search of `system-design.md` and this log found zero mentions of parallel, fork, or join in the workflow sense — so there was no prior commitment in either direction.
+
+The cost of adding it is concentrated in that one index, which its own comment says does three jobs.
+Parallelism takes all three: the invariant goes by definition, "current step" becomes "current steps" and changes `WorkflowState`'s read surface, and the completion serialization is lost — the property that is "why the completion path needs no version column, no `SELECT FOR UPDATE`, and no serializable isolation."
+Beyond the index it needs a fork construct, join semantics, and an abandoned-visit state that `ck_step_visit_completion` currently makes unrepresentable.
+
+What settled it was the target rather than the cost.
+Asked whether the audience needs N-of-M voting or true simultaneous sign-off as a first-class capability, the owner answered: "no, approval chains with AI review is the target."
+
+Two supporting arguments, recorded because they are the ones a future reader will want tested.
+
+**Latency.** Agent review steps run in seconds to minutes; human response runs in hours to days.
+A step that blocks for sixty seconds inside a five-hour wait is invisible.
+An agent that takes two days is waiting on something, and that something should be steps rather than the interior of one step — so a long-running agent is usually evidence of mis-modelling, not evidence the engine needs parallelism.
+
+**What is genuinely lost, recorded rather than argued.**
+N-of-M voting is inexpressible; no sequential encoding captures "two of three must approve" without order mattering.
+Simultaneous independent sign-off *is* expressible as a chain where every link must approve — the set of required approvals and each party's veto are identical, and only wall-clock time is lost.
+That encoding gains two things worth naming: it fails fast, so a rejection at the first link spares the others entirely, and it lets the most likely rejecter be placed first.
+Fan-out already exists, since two runs of different definitions may be active on one subject; what is missing is the join, which the client performs.
+
+**Consequence.**
+If a real requirement ever arrives, the migration is believed tractable and should start from this sketch rather than a rediscovery: a branch discriminator, with the index becoming `unique (workflow_id, branch_id) where completed_at is null`, and existing rows taking branch zero.
+That preserves the completion race per branch, so the concurrency mechanism is parameterized rather than lost.
+The genuinely new work is the join insert — N branches converging, exactly one visit created — and the real break is `CurrentStep` becoming `CurrentSteps`, which is a major version.
+None of this is designed now, and none of it is built.
+
+---
+
+## 41. `remark`: the reason for a decision is stamped with the decision
+
+**Context.**
+Where the reason for a completion lives.
+An agent produces findings; a human writes "approved, but flagging the Q3 overage."
+Iteration 1 had nowhere to put either.
+
+**Options.**
+The client's own store, keyed by visit id.
+One text column on the visit, written at completion.
+Multiple notes, editable, with threading.
+
+**Decision.**
+One optional `remark` on `step_visit`, an optional member of the atomic completion stamp, immutable in effect, capped at 3000 characters.
+
+**Why.**
+**The draft's first position was wrong and the owner corrected it.**
+A comment field had been rejected here on "not a document store" grounds.
+The owner's correction was that the boundary refuses to hold the *workflow subject* — the artwork, the expense form — whereas a rationale for a decision FlowCore itself owns is an attribute of that decision, sitting beside `completed_by` with the same rhythm: written once at completion, never rewritten.
+It also has a caller with no agent anywhere in sight, which is the test `CLAUDE.md` applies.
+
+The argument that carried it is a two-system write.
+When the client dispatches the model call onto its own queue (decision 43's case 4), the worker completing the visit is a different process from the one holding the subject.
+Findings outside FlowCore then mean two writes to two systems with no transaction across them: crash in between and there is a decision with no reason, or a reason attached to a decision that never landed, and nothing detects either.
+With the remark on `CompleteStep` it is one call and one transaction.
+As the owner put it, keeping decision data outside the engine because the engine lacks somewhere to put it manufactures a second source of truth for something FlowCore already owns.
+
+**On the name, where the draft's recommendation half survived.**
+`comment` and `note` were both rejected by the owner for evoking editability — a comment system, a notepad.
+The owner proposed `info`; the draft argued for `statement` instead, on the grounds that a field is defended by being able to say "that is not what this field is for," which requires the field to be *for* something nameable.
+`info` means "stuff," so it fences nothing when someone asks to put a full agent report in it.
+The owner chose `remark` from the alternates offered — inert, naturally past-tense, and narrower than `info` without `statement`'s legalistic weight.
+
+**On the cap**, the owner's reasoning: "A remark is a sentence or a 1 page, beyond that it's the camel's nose," balancing "FlowCore is not your document store" against "FlowCore can still be used as a practical workflow engine where you can store remarks without hassle" — the case where no agent is involved and the client stores nothing at all.
+
+Four supporting points.
+A single-spaced page really is about 3000 characters, so the number is calibrated rather than arbitrary.
+Raising a CHECK later is one non-lossy line while lowering one is lossy, so tight-then-raise is the reversible direction and starting generous is the irreversible mistake.
+Values past roughly 2 kB move to TOAST storage, so queries that do not select the column pay nothing for long remarks.
+And `char_length` counts characters, so the real byte bound is 4×, consistent with every existing text column rather than a new exposure.
+
+**The cap is a statement of intent, not a performance limit.**
+Recorded explicitly, because a request to raise it to 50,000 would win on benchmark grounds — it would not be measurably slow — and the answer has to be "that is not a remark."
+
+**Consequence.**
+Immutability here is a property of the API surface, not the database.
+Nothing prevents an `UPDATE` on a closed visit today; the visit is "append-only in effect" because no method rewrites one, and the remark inherits exactly that status alongside `completed_by`.
+Enforcing it would be new structure for a violation no caller can commit.
+
+The owner's answer to "can I edit it?", which the docs should carry: accept that it stays wrong, restart the run, or keep the authoritative copy outside FlowCore and find it from the subject id.
+
+The remark is optional — a completion without one is ordinary, a remark without a completion is unrepresentable — so it joins the all-or-nothing group without re-imposing a mandate.
+
+---
+
+## 42. The worklist and reassignment land together in iteration 2
+
+**Context.**
+Iteration 2 needed to know how an agent finds work addressed to it.
+The draft's framing — that the worklist was "designed, not built," and had been demoted to a convenience — was challenged by the owner, who recalled that it was either already implemented or thoroughly planned.
+
+**Options.**
+Defer the worklist again.
+Land the assignee-keyed half.
+Land the whole deferred bundle, including `step_visit.step_definition_id`.
+
+**Decision.**
+The assignee-keyed worklist and reassignment both land in iteration 2.
+`step_definition_id` and the two indexes keyed on it stay deferred.
+
+**Why.**
+**The owner was right and the draft's characterization was wrong.**
+Decision 32 deferred the worklist with its cost already stated — "one column, one backfill, and three partial indexes — none of it lossy, all of it measured in advance" — and decisions 24 and 25 hold the numbers, 0.06 ms / 70 buffers as an index probe against 19.6 ms / 6,591 as a join.
+Decision 28 had already rejected the nullable-override assignee partly to protect that index's query shape, so the worklist was a live constraint on a decision that shipped in iteration 1.
+
+Found while checking, and the reason the slice is cheaper than decision 32's summary implies: the three deferred indexes are keyed by two different things.
+The `assignee_id` one serves the worklist; the `step_definition_id` ones serve "all open steps on Director Approval" and need the deferred column and its backfill.
+Decision 32 bundled them because keeping the column while deferring its indexes would have been inconsistent, but landing only the assignee half is consistent — one partial index, one method, no column, no backfill, no re-probing.
+
+**Reassignment rides with it because the worklist is what gives it a caller.**
+Decision 28 left `step_visit.assignee_id` deliberately mutable with no method to write it, noting that "mutable here is the absence of a constraint, not an artifact with no caller."
+The worklist changes the stakes: a queue you can read and cannot manage is half a feature.
+This is the shape of `CLAUDE.md`'s own worked example — `UpdateStep` on a table that already exists — rather than building ahead.
+
+**Consequence.**
+**Reassignment leaves no trail.** Dana to Priya to Sam overwrites the column twice and records only Sam.
+Accepted, and recorded rather than argued: decision 28 already protects the part that matters, since a closed visit freezes who a decision was assigned to, and "who holds this now" is the question an open visit's column is there to answer.
+
+The remaining deferred half keeps decision 32's justification unchanged — an index is recoverable with `CREATE INDEX CONCURRENTLY` and the column is backfillable in one `UPDATE … FROM`, so the no-speculative-structure rule applies to it unmodified.
+
+---
+
+## 43. The library never calls a model; the caller orchestrates
+
+**Context.**
+Decision 39 settled that an agent is an ordinary actor, which left open who actually makes the model call and how it is triggered.
+The owner posed it as a question about vocabulary as much as mechanism — whether the thing in the step is an agent, a prompt, or a model API call — and sketched three integration shapes for an "expenseSystem" client.
+
+**Options.**
+1. The client orchestrates inline: it reads the current step, recognises the assignee, calls the model, and completes the step.
+2. The prompt is stored on the step definition, and FlowCore calls the API and advances the run itself.
+3. A separate runner polls a worklist for agent-assigned work.
+4. Added during the interview: the client enqueues the work onto its own job queue on seeing an agent-assigned step, and a worker completes the visit.
+
+**Decision.**
+Cases 1 and 4 are the target shape.
+Case 2 is rejected.
+Case 3 is a recovery sweeper, not the dispatch mechanism.
+The owner's answer: "yes, cases 1 and 4, reject case 2."
+
+**Why.**
+**On the vocabulary, first, because it dissolves the question.**
+A model API call is one request and one response; a prompt is the instruction text configuring it; an agent is a loop of model plus tools.
+FlowCore cannot distinguish the three and must not try — all of them are "something outside decided, then called `CompleteStep`."
+The distinction governs the client's latency, cost and retry policy, and is invisible to the library.
+If FlowCore ever needs to know which one is acting, the boundary has failed.
+
+**Case 2 is structurally impossible, not merely undesirable**, and this is the fact that settled it.
+FlowCore holds `SubjectReference string` — the literal token `"expense:4471"` — and nothing else.
+To build a useful prompt it needs the expense's line items, amounts and receipts, which it does not have.
+So case 2 requires either storing subjects, which contradicts "not a document store," or calling back into the client to fetch them, which inverts the relationship and makes the library drive the application.
+Everything else against case 2 — becoming an HTTP client, holding API keys, owning retry and timeout policy, acquiring a vendor dependency, putting network I/O beside database transactions — is true but secondary.
+
+**The trigger problem dissolves in cases 1 and 4**, and it had been carried as a genuine open gap until the read surface was checked.
+`CurrentStep` already carries `AssigneeID`, and both `Start` and `CompleteStep` return the whole `WorkflowState`.
+So whoever advances the run is *already holding* the answer to "is the next step an agent's" — no polling, no webhooks, no events.
+That generalises to every transition, not just the first: when a human completes a step and the next is an agent's, the human's client learns it in the response.
+
+**Case 3 therefore earns its place only as recovery**, for when the process holding that knowledge cannot act on it — a browser session that should not run a ninety-second job, or a client that crashed between completing one step and dispatching the next.
+The worklist's stronger justification is a human asking what is in their queue, which has nothing to do with agents; see decision 42.
+
+**Consequence.**
+FlowCore grows no retry, backoff, or timeout semantics for agent work.
+Case 4's answer to "what happens when the runner is down or slow" is the client's existing job queue, which already has retries, backoff, dead-letter handling and alerting.
+A workflow library reimplementing those would be building a worse queue inside itself, and that trap is worth naming rather than rediscovering.
+
+Iteration 2 therefore builds nothing for dispatch or failure handling.
+Walking the whole of case 1 and 4 against what shipped in iteration 1 left exactly one gap — somewhere for the agent's findings and reasoning to live — which is decision 41.

@@ -507,3 +507,22 @@ Out of scope: AI review steps, Synchronization, Failure Handling, Scale
 ** Increment 2 candidate: automated advisory step type (findings + human override + audit)
 a step type exists whose executor is external, async, fallible, and advisory rather than deciding.
 flow idea: "AI director pre-check" -> finds 7 issues and shows warnings -> salesperson reviews the issues and makes changes or overrides the warnings...
+
+# Iteration 2 Scope
+
+Flows:
+_Get Assigned Steps (worklist)_ — assignee-keyed only
+_Reassign Step_
+_Complete Step_ — gains an optional remark
+
+AI review steps are in scope and need no new mechanism.
+An AI review step is an ordinary step whose `assignee_id` is an opaque agent reference, completed by whatever acts on its behalf.
+This supersedes the increment 2 candidate noted above: "advisory rather than deciding" is not a step type but graph topology, chosen per definition — an advisory step's actions converge on a human step, a deciding step's diverge.
+Human override is the human completing the agent's visit, which the completer-need-not-be-assignee rule already permits, and a superseded agent's late completion is refused by the existing stale-visit check.
+
+The two capabilities that make an agent usable as an actor are the worklist, so work addressed to it can be found, and the remark, so the reason for a decision is stamped in the same transaction as the decision.
+Reassignment joins them because the worklist is what gives it a caller: a queue you can read and not manage is half a feature.
+
+Out of scope: parallel steps and joins, N-of-M voting, the library calling a model or holding a prompt, agent retry and failure policy, `step_visit.step_definition_id` and the two indexes keyed on it, Scale.
+
+The resolutions behind these — why the library never calls a model, why sequential-only, and the shape of the remark — land as decisions 39 onward and are written into the sections above.

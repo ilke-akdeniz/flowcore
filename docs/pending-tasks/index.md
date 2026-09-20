@@ -4,4 +4,4 @@ Details for work that is not started or not completed yet are stored in md files
 
 Permanent project state lives in [status.md](../status.md), not here.
 
-- [Iteration 2 — AI review steps](iteration-2-ai-review-steps.md) — source material gathered before design starts: open questions, guardrails, and a test scenario.
+- [Iteration 2 — AI review steps](iteration-2-ai-review-steps.md) — the agreed plan, what decisions 39-43 settled, and a scenario to test the build against.
