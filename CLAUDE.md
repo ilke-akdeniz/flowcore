@@ -110,6 +110,10 @@ Propose a change and say why it qualifies; never edit a status unilaterally.
 Link every such file from `docs/pending-tasks/index.md`.
 The task file holds the detail; `status.md` holds the state — don't duplicate state into the task file.
 
+**Agreed plans.** When a pending-task file carries a plan marked **[agreed]**, that plan is binding — read it before starting work on that task and follow it in order.
+If the work suggests deviating, a different sequence, a skipped phase, or a new step, stop and raise it.
+Silent re-sequencing is the failure these plans exist to prevent.
+
 ## Markdown conventions
 
 All docs (`CLAUDE.md`, `docs/*.md`) follow these, for clean git diffs and portable rendering.

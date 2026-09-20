@@ -11,6 +11,63 @@ Claims are tagged so their weight is visible:
 - **[repo]** — already recorded in the repository's docs or code.
 - **[owner]** — a position the owner stated in that conversation; not yet written into the design docs.
 - **[idea]** — an unratified suggestion from the conversation, offered as a starting point to argue with.
+- **[agreed]** — settled with the owner and binding on this iteration.
+  The plan below is the only such section.
+
+## The plan — agreed 2026-09-20
+
+**[agreed]** This is the agreed route through iteration 2.
+Follow it in order.
+If the work suggests a different sequence, or a phase turns out to be unnecessary, stop and say so — drifting from it silently is the failure this section exists to prevent.
+
+### Phase 0 — Frame the slice
+
+1. **Grill advisory versus deciding.**
+   Run `/grilling` on that question alone.
+   It is the decision everything else reorganizes around, and the repository currently holds two incompatible answers.
+2. **Grill the scope boundary.**
+   What is in iteration 2 and what defers to iteration 3: the comment field, the trigger mechanism, the worklist, failure and retry.
+   Apply the no-speculative-structure test to each one individually.
+3. **Write `# Iteration 2 Scope` into `system-design.md`**, mirroring the iteration 1 section — flows in scope, everything else explicitly out.
+   Move iteration 2 to *In progress* in `status.md`; that is the owner's call.
+
+### Phase 1 — Decisions, one at a time, design doc first
+
+Each decision lands in `system-design.md` (what it is), then `decisions.md` from 39 (why, and the options rejected).
+Don't introduce ADR files — `decisions.md` is already the project's format, and a second one would split the authority.
+
+4. **The step shape** — advisory or deciding.
+   A model change, so the owner settles it.
+5. **The comment field** — shape, mutability, one note or many.
+6. **Trigger and pickup** — poll, client-emit, or explicitly deferred with a note in this file rather than built.
+7. **Failure and retry semantics** — the first slice that has to answer this, because the executor is fallible.
+
+### Phase 2 — Build, in iteration 1's order
+
+Iteration 1's commit sequence is the template; reuse it rather than inventing one.
+
+8. Migration — whatever schema the decisions require.
+9. Go types and params.
+10. Store helpers, and the errors they need.
+11. Engine methods.
+12. Tests against real Postgres at each layer, not batched at the end.
+
+Small reviewable commits, with `/code-review` before each.
+
+### Phase 3 — Close out
+
+13. Refresh `code-map.md`, and note anything `architecture.md` now misstates.
+14. Propose *Complete*; the owner decides.
+
+### One dependency to respect
+
+**Step 4 gates step 5.**
+
+Under the deciding shape, the agent completes its own visit and its rationale goes in that visit's comment — atomic, and the shape the comment field was argued for.
+Under the advisory shape, the executor produces findings *before* a human completes the visit, so a comment writable only as part of the completion stamp cannot hold them.
+Advisory therefore forces either a second home for findings, or a comment writable outside completion — and the second breaks the atomicity that made the field defensible.
+
+The grilling in step 1 should carry this as a pressure point: does the preferred step shape leave the agent's findings anywhere legal to live?
 
 ## Where iteration 2 starts from
 
@@ -215,13 +272,6 @@ That is asking for trouble.
 **[repo]** No speculative structure still applies.
 A capability earns its place this slice only if it is the correctness condition of something being built now.
 The trigger mechanism, the worklist, and the comment field each need that test applied individually — some will pass it for iteration 2, and the ones that do not should be deferred with a note here rather than built.
-
-## Still to do before design starts
-
-- Settle advisory versus deciding.
-- Decide whether the comment field is part of iteration 2 or lands ahead of it as its own slice.
-- Apply the no-speculative-structure test to the trigger mechanism and the worklist.
-- Write the resulting decisions into `system-design.md`, then `decisions.md` from 39.
 
 ## References — cookbook examples we looked at
 
