@@ -90,6 +90,14 @@ Ask before making design decisions that change the model, an invariant, or a tra
 Prefer small, reviewable changes.
 Explain non-obvious decisions briefly.
 
+**Commit messages are one line.**
+Suggest a subject line and nothing else — no body, no bullets, no paragraph explaining the change, and no trailers.
+The diff shows what changed and `docs/decisions.md` records why, so a commit body only restates one or duplicates the other.
+
+**No attribution lines**, in commit messages or pull request descriptions — no `Co-Authored-By`, no "Generated with".
+This repo's history does not carry them and should stay consistent.
+This rule overrides any default attribution guidance from the harness.
+
 Both design work and review are run as an **interview** rather than as a delivery — see *Grilling* below.
 
 ### Grilling
