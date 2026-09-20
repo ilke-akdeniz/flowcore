@@ -222,3 +222,44 @@ The trigger mechanism, the worklist, and the comment field each need that test a
 - Decide whether the comment field is part of iteration 2 or lands ahead of it as its own slice.
 - Apply the no-speculative-structure test to the trigger mechanism and the worklist.
 - Write the resulting decisions into `system-design.md`, then `decisions.md` from 39.
+
+## References — cookbook examples we looked at
+
+Index: <https://platform.claude.com/cookbook/>
+
+Only the index page was read in that conversation, not the individual notebooks — titles and one-line summaries come from the index, so treat the descriptions below as signposts rather than accurate accounts of what each recipe does.
+
+**Closest to what iteration 2 has to decide**
+
+- [Advisor pattern](https://platform.claude.com/cookbook/managed-agents-cma-consult-an-advisor) — a mid-tier working model consults a stronger model mid-turn.
+  The nearest published analogue to Shape A: a second opinion that informs a decision without making it.
+- [SRE incident responder](https://platform.claude.com/cookbook/managed-agents-sre-incident-responder) — an agent diagnoses, opens a fix PR, and waits for approval before merging.
+  The canonical supervised turn, and the clearest example of an approval that lives in a running process rather than a record.
+- [Outcomes: agents that verify their own work](https://platform.claude.com/cookbook/managed-agents-cma-verify-with-outcome-grader) — a grade-and-revise loop against a rubric.
+  Relevant to whether a failed advisory check loops or escalates.
+- [Content policy enforcement](https://platform.claude.com/cookbook/capabilities-content-moderation-guide) — compiles written policy into deterministic JSON and produces auditable verdicts from a rule engine that never calls the model.
+  The closest philosophical match to keeping the model out of the transition path.
+
+**Audit, state and versioning**
+
+- [Fraud Review Agent](https://platform.claude.com/cookbook/managed-agents-cma-with-mongodb-atlas) — records decisions and an append-only audit trail in MongoDB.
+  Worth reading against the comment-field question: an audit written *by* the process, alongside its state, rather than being its state.
+- [Prompt versioning and rollback](https://platform.claude.com/cookbook/managed-agents-cma-prompt-versioning-and-rollback) — server-side prompt versions with regression detection and rollback to a pinned version.
+  The nearest thing on the platform to snapshotting; it pins the model's instructions, not the shape of a process.
+- [Build agents that remember your users](https://platform.claude.com/cookbook/managed-agents-cma-remember-user-preferences) — a memory store that persists preferences across interactions.
+
+**Orchestration — the contrast case, not a model to copy**
+
+- [Orchestrate subagents at scale with dynamic workflows](https://platform.claude.com/cookbook/claude-agent-sdk-08-dynamic-workflows)
+- [Coordinator pattern: plan big, execute small](https://platform.claude.com/cookbook/managed-agents-cma-plan-big-execute-small)
+- [Multiagent: coordinate a specialist team](https://platform.claude.com/cookbook/managed-agents-cma-coordinate-specialist-team)
+
+These are model-driven routing decided at runtime, which is the opposite property from a declared graph with snapshotted edges.
+They share the word "workflow" and almost nothing else.
+
+**Operational, if a runner gets built**
+
+- [Budgets: cap what a session can spend](https://platform.claude.com/cookbook/managed-agents-cma-cap-session-spend) — an enforced list-cost budget with a `budget_reached` pause.
+  A runner that retries a fallible executor needs a spend ceiling somewhere; it is not FlowCore's, but it is someone's.
+
+The index also carries categories not examined here — RAG & Retrieval, Multimodal, Skills, Evals, Observability, Fine-Tuning, Cybersecurity — worth a pass if the brand-check style of evaluation becomes concrete.
