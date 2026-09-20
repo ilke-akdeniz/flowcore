@@ -100,17 +100,11 @@ When the two appear to disagree, `decisions.md` wins.
 ## Project state
 
 `docs/status.md` is the permanent record of project state — where each iteration, slice, and pending task stands.
-Read it at the start of a session to see what is in flight, and update it when a state changes.
+Read it at the start of a session to see what is in flight.
+It defines the statuses; don't restate them here.
 
-The test that separates the three states is **major output**: the artifact the task exists to produce, not notes or ideas about it.
-A design document is major output; a record of ideas about the same work is not.
-
-- *Not started* — no source code and no major output exists yet.
-- *In progress* — major outputs are being worked on.
-- *Complete* — major outputs are done.
-
-Moving something to *Complete* is the owner's decision.
-Propose the move and say why it qualifies; never make it unilaterally.
+The owner decides when a subject's status changes.
+Propose a change and say why it qualifies; never edit a status unilaterally.
 
 **Pending tasks.** Work that cannot be done yet, or that we had to leave to switch tasks, gets its own markdown file in `docs/pending-tasks/` once it carries more detail than a session can hold.
 Link every such file from `docs/pending-tasks/index.md`.
