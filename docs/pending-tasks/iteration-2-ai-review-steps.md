@@ -22,8 +22,8 @@ If the work suggests a different sequence, or a phase turns out to be unnecessar
 
 ### Phase 0 — Frame the slice
 
-1. **Grill advisory versus deciding.**
-   Run `/grilling` on that question alone.
+1. **Grill advisory versus deciding**, following *Grilling* in `CLAUDE.md`.
+   That question alone, before anything else.
    It is the decision everything else reorganizes around, and the repository currently holds two incompatible answers.
 2. **Grill the scope boundary.**
    What is in iteration 2 and what defers to iteration 3: the comment field, the trigger mechanism, the worklist, failure and retry.

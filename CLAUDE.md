@@ -90,6 +90,45 @@ Ask before making design decisions that change the model, an invariant, or a tra
 Prefer small, reviewable changes.
 Explain non-obvious decisions briefly.
 
+Both design work and review are run as an **interview** rather than as a delivery — see *Grilling* below.
+
+### Grilling
+
+**A design decision and a review are worked through by interview, not by delivering a result and waiting for objections.**
+
+The procedure:
+
+- **Interview until there is shared understanding, then act.**
+  Nothing is written to `docs/system-design.md`, `docs/decisions.md`, or the code until the owner says the questions are settled.
+  Applying decisions as they are agreed loses the ability to order the work by what depends on what.
+  What does land is left uncommitted for the owner to review — Claude does not commit in this repo.
+- **One question at a time**, waiting for the answer before the next one.
+  A batch of questions is bewildering, and it also hides which ones were dependent on which.
+- **Give a recommended answer with every question**, and the reasoning for it.
+  A question with no recommendation pushes the work back onto the owner, which is the opposite of the point.
+- **Look facts up rather than asking.**
+  What a constraint already enforces, whether a store helper exists, what a migration would cost, what the design doc already says — go and find out.
+  The *decisions* are the owner's; the facts are Claude's job, and a fact discovered before the question is asked often settles it.
+  Iteration 2's advisory-versus-deciding question changed shape the moment the increment 2 note already sitting in `system-design.md` was read.
+- **Order the questions by dependency.**
+  Ask the root decision first.
+  Iteration 2's step shape comes before the comment field's shape, because whether a comment can be written only as part of the completion stamp depends on which shape wins — asking it first would mean asking it twice.
+- **Say what a decision will cost before it is taken**, where the cost is not obvious: a migration, a breaking change to a params struct, a constraint that has to be deferred, a column that cannot be dropped later.
+  The answer changes when the consequence is visible.
+- **Surface decisions the owner did not tag.**
+  A review is not an exhaustive list of what is wrong; anything found on the way in is worth putting to them as a question of its own.
+- **Log the interview, not only what it concluded.**
+  Grilling is where the design judgments get made, so the exchange goes into `docs/decisions.md` with the work: the owner's objection in their own words, Claude's recommendation where it did not survive, and any fact found mid-interview that changed the question being asked.
+  A log that keeps only the conclusions is the quiet failure — grilling produces conclusions that look self-evident once reached and were not.
+- **Keep a running note as the answers land.**
+  Four questions in, the early exchanges are easy to reconstruct wrongly and easy to reconstruct confidently.
+  The owner's exact words are worth more than the paraphrase.
+
+**When it is not worth it.**
+The technique is slow by design.
+A review that is three typos and a rename is applied, not interviewed.
+The test is whether any item would change what the other items should be — where nothing depends on anything, there is no tree to walk, and an interview is ceremony.
+
 ## Doc authority
 
 `docs/decisions.md` is authoritative for design reasoning.
