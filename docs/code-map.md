@@ -55,8 +55,8 @@ One row is written each time a run _enters_ a step, so a step reached twice by a
 |   Get                                  |   CompleteStep                |
 |   UpdateWorkflowDefinition             |   GetState                    |
 |   DeleteWorkflowDefinition             |   GetHistory                  |
-|   Add / Update / Delete Status         |                               |
-|   Add / Update / Delete Step           |                               |
+|   Add / Update / Delete Status         |   ListAssignedSteps           |
+|   Add / Update / Delete Step           |   Reassign                    |
 |   Add / Update / Delete Action         |                               |
 |                                        |                               |
 | unexported, tree-shaped, no SQL:       | unexported, no SQL:           |
@@ -125,9 +125,11 @@ They are not a layer; nothing in them reaches downward.
 |   +- Steps    []                 |  |       +- Actions []              |
 |       +- Actions []              |  |  StepVisit                       |
 |                                  |  |   +- Completion *                |
-|  ONE TYPE PER TABLE: a           |  |                                  |
-|  definition's read shape IS      |  |  NOT one type per table:         |
-|  its row shape.                  |  |  PROJECTIONS assembled from      |
+|  ONE TYPE PER TABLE: a           |  |  AssignedStep  (a worklist       |
+|  definition's read shape IS      |  |   row; spans runs)               |
+|  its row shape.                  |  |                                  |
+|                                  |  |  NOT one type per table:         |
+|                                  |  |  PROJECTIONS assembled from      |
 |                                  |  |  several tables at once.         |
 +----------------------------------+  +----------------------------------+
 
@@ -140,11 +142,16 @@ They are not a layer; nothing in them reaches downward.
 |   AddStepParams                     CompleteParams                     |
 |   UpdateStepParams                                                     |
 |                                                                        |
-|   Nullable[T] + SetTo / Clear   immutable columns are OMITTED,         |
-|   validate() rejects a field    so they cannot be expressed            |
-|   left undecided                                                       |
+|   Every field is required;      immutable columns are OMITTED,         |
+|   a forgotten one fails a       so they cannot be expressed            |
+|   constraint, never silently                                           |
 +------------------------------------------------------------------------+
 ```
+
+`Nullable[T]`, `SetTo` and `Clear` used to live here, for the one settable column
+a constraint did not protect.
+Making `assignee_id` NOT NULL removed the gap instead of guarding it, so an omitted
+field is now the empty string and fails a length CHECK (dec. 44).
 
 All of it is inert: no pool, no ctx, no pgx, no `Save`, no `Load`, no `Delete` (dec. 11).
 The only methods are `ToUpdate()`, which turns a read value into the params for updating it, and `clone()`, a deep copy.
@@ -192,7 +199,9 @@ On a pool those are two independent commits, so a failure between them leaves a 
 
 ## Transactions, and why the isolation levels differ
 
-Only five methods open a transaction. Everything else is a single statement on the pool.
+Only five methods open a transaction. Everything else runs on the pool without one.
+
+Two of those take more than one statement and still need no transaction: `GetHistory` and `Reassign` each key their second statement on an id the first returned, so a concurrent write cannot tear the result — the worst case is an answer a moment stale, which is indistinguishable from having been called a moment sooner.
 
 ```
   Catalog.Create        default          write a whole tree atomically
@@ -260,7 +269,8 @@ Engine.CompleteStep(ctx, params)
 |        NOT repeatable read -- see above
 |
 |  [2] completeStepVisit(...)                store_step_visit.go
-|        UPDATE ... SET completed_at = now(), completed_by, selected_action
+|        UPDATE ... SET completed_at = now(), completed_by, selected_action,
+|                       subject_version_token, remark      dec. 41
 |        WHERE id = $1 AND completed_at IS NULL      <- THE GATE dec. 34
 |                                            RETURNING the closed row
 |

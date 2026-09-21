@@ -14,6 +14,6 @@ Claude can propose a change and say why; it never makes one unilaterally.
 
 - **Iteration 1** — *Complete*.
   Configure workflow, start workflow, get current step, complete step.
-- **Iteration 2** — *In progress*.
+- **Iteration 2** — *Complete*.
   AI review steps, the worklist, reassignment, and the completion remark.
   Detail in [pending-tasks/iteration-2-ai-review-steps.md](pending-tasks/iteration-2-ai-review-steps.md).

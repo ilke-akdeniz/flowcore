@@ -60,7 +60,7 @@ Small reviewable commits, with `/code-review` before each.
 
 ### Phase 3 — Close out
 
-13. Refresh `code-map.md`, and note anything `architecture.md` now misstates.
+13. Refresh `code-map.md`, the derived view of package and struct-level structure.
 14. Propose *Complete*; the owner decides.
 
 ### One dependency to respect — resolved

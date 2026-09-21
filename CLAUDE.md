@@ -140,9 +140,9 @@ The test is whether any item would change what the other items should be — whe
 ## Doc authority
 
 `docs/decisions.md` is authoritative for design reasoning.
-`docs/architecture.md` is a derived, illustrative view of package and struct-level structure — not a second source of truth.
+`docs/code-map.md` is a derived, illustrative view of package and struct-level structure — not a second source of truth.
 When the two appear to disagree, `decisions.md` wins.
-`architecture.md` is refreshed periodically, not automatically after every decision, so staleness between refreshes is expected, not a bug to chase down immediately.
+`code-map.md` is refreshed periodically, not automatically after every decision, so staleness between refreshes is expected, not a bug to chase down immediately.
 
 ## Project state
 
