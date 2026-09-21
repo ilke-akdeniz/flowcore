@@ -56,7 +56,13 @@ const (
 	ckStepAssigneeLen           = "ck_step_assignee_len"
 	ckStepVisitAssigneeLen      = "ck_step_visit_assignee_len"
 	ckStepVisitCompletedByLen   = "ck_step_visit_completed_by_len"
-	ckStepVisitTokenLen         = "ck_step_visit_subject_version_token_len"
+
+	// The remark's length CHECK caps at 3000 rather than 500 and holds prose
+	// rather than an identifier, so it gets its own error instead of joining
+	// InvalidIdentifierError — a message saying "between 1 and 500 characters"
+	// would be wrong twice over.
+	ckStepVisitRemarkLen = "ck_step_visit_remark_len"
+	ckStepVisitTokenLen  = "ck_step_visit_subject_version_token_len"
 
 	// The instance-side name CHECKs, which do cap at 200 and so map to
 	// InvalidNameError alongside the definition-side ones. They are unreachable
@@ -86,6 +92,11 @@ const (
 	// grounds: the Engine writes all three completion columns in one statement and
 	// takes both timestamps from now(), so a violation means the library is wrong,
 	// not the caller.
+	//
+	// ck_step_visit_remark_requires_completion and its subject_version_token twin
+	// are absent for that reason too. Both values are only ever written by the
+	// same statement that closes the visit, so neither can reach an open row
+	// unless the library stops doing that.
 	//
 	// The instance cascade-driver FKs (fk_step_workflow, fk_action_step,
 	// fk_step_visit_workflow) are absent too. Unlike their definition-side
@@ -249,6 +260,8 @@ func mapConstraintCommon(pg *pgconn.PgError, name string) (error, bool) {
 			ckWorkflowNameLen, ckWorkflowStatusNameLen, ckStepNameInstanceLen,
 			ckStepStatusNameLen, ckActionNameInstanceLen, ckActionTerminalStatusNameLen:
 			return &InvalidNameError{}, true
+		case ckStepVisitRemarkLen:
+			return &InvalidRemarkError{}, true
 		}
 
 		if field, ok := identifierField(pg.ConstraintName); ok {

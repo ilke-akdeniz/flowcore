@@ -172,6 +172,57 @@ func (e *Engine) GetHistory(ctx context.Context, subjectReference string, workfl
 	return listStepVisits(ctx, e.pool, workflowID)
 }
 
+// ListAssignedSteps returns the open steps waiting on any of the given assignee
+// references, oldest first — the worklist. The caller resolves what "me" means,
+// typically its own user id plus that user's group memberships, and every
+// reference is opaque: the library compares them for equality and never asks what
+// a group is or whether the caller belongs to one.
+//
+// No transaction, and the strongest reason is that it is one statement. A worklist
+// is a view of work in flight, so it is stale the moment it returns whatever
+// isolation it was read under — an item can be completed by someone else while the
+// caller is still rendering the list. That is not a defect to design around: the
+// visit id each row carries is what catches it, since completing or reassigning a
+// visit that has since closed is refused rather than silently applied.
+//
+// Passing no references returns no rows. That falls out of `= any($1)` rather than
+// being special-cased, and it is the right answer: asking what is assigned to
+// nobody is not the same as asking for everything.
+func (e *Engine) ListAssignedSteps(ctx context.Context, assigneeReferences []string) ([]AssignedStep, error) {
+	return listAssignedSteps(ctx, e.pool, assigneeReferences)
+}
+
+// Reassign moves an open step visit to a different assignee and returns where the
+// run now stands, so a caller re-renders from the same shape CompleteStep and
+// GetState return.
+//
+// VisitID rather than a subject: reassignment acts on one entry into one step, and
+// a run that has looped is sitting on a step it has visited before, so only the
+// visit identifies the work being moved. A stale id is refused for the same reason
+// it is in CompleteStep — the run moved on and the caller is looking at a view that
+// no longer exists.
+//
+// AssigneeID is required and opaque. There is no unassign: an empty value fails
+// the column's length CHECK, and NULL is unreachable since decision 44 made the
+// column NOT NULL. Work with no assignee would match no worklist query, so
+// releasing it that way would hide it rather than free it.
+//
+// Only an open visit can be reassigned. A closed one is never rewritten, which is
+// what keeps "who was this assigned to when they decided" answerable for every
+// past decision — so reassigning cannot rewrite history, only redirect what has
+// not happened yet.
+//
+// No transaction. The update is one conditional statement that both tests and
+// writes, and the read that follows is keyed on the workflow id it returned.
+func (e *Engine) Reassign(ctx context.Context, visitID uuid.UUID, assigneeID string) (WorkflowState, error) {
+	visit, err := reassignStepVisit(ctx, e.pool, visitID, assigneeID)
+	if err != nil {
+		return WorkflowState{}, err
+	}
+
+	return getWorkflowState(ctx, e.pool, visit.WorkflowID)
+}
+
 // advance applies the routing decision the completed action carries: either open
 // the next visit and stamp the step's status, or close the run in the action's
 // terminal status.

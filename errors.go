@@ -66,6 +66,10 @@ var (
 	// ErrActionNotAvailable is returned when the requested action does not belong
 	// to the step being completed. See ActionNotAvailableError.
 	ErrActionNotAvailable = errors.New("flowcore: action is not available on this step")
+	// ErrInvalidRemark is returned when a completion remark is empty or longer
+	// than 3000 characters. See InvalidRemarkError.
+	ErrInvalidRemark = errors.New("flowcore: invalid remark")
+
 	// ErrInvalidIdentifier is returned when an opaque identifier is empty or too
 	// long. See InvalidIdentifierError.
 	ErrInvalidIdentifier = errors.New("flowcore: invalid identifier")
@@ -251,3 +255,18 @@ func (e *InvalidIdentifierError) Error() string {
 	return fmt.Sprintf("flowcore: %s must be between 1 and 500 characters", e.Field)
 }
 func (e *InvalidIdentifierError) Unwrap() error { return ErrInvalidIdentifier }
+
+// InvalidRemarkError reports a completion remark that is empty or longer than
+// 3000 characters. It carries no field, because there is one remark and naming it
+// would add nothing — the departure from InvalidIdentifierError, which serves
+// several columns and so has to say which.
+//
+// The bound is a statement of intent rather than a limit of the storage: a remark
+// is a sentence or a page, and anything longer is a document, which belongs in the
+// client keyed by the subject. Wraps ErrInvalidRemark.
+type InvalidRemarkError struct{}
+
+func (e *InvalidRemarkError) Error() string {
+	return "flowcore: remark must be between 1 and 3000 characters"
+}
+func (e *InvalidRemarkError) Unwrap() error { return ErrInvalidRemark }

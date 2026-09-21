@@ -3,6 +3,7 @@ package flowcore
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -372,6 +373,88 @@ func TestCompleteStampsTheDecision(t *testing.T) {
 
 	if history[1].Completion != nil {
 		t.Error("the open visit must have no completion")
+	}
+}
+
+// The remark is stamped with the decision it explains, returned by the history,
+// and optional. Together those are the whole contract: one write, one transaction,
+// nothing required of a caller who has nothing to say.
+func TestCompleteStampsTheRemark(t *testing.T) {
+	engine, catalog := newEngine(t)
+	definition, _ := twoStepDefinition("expense approval")
+	ctx := context.Background()
+
+	state := startRun(t, engine, catalog, definition, "expense:4471")
+
+	state, err := engine.CompleteStep(ctx, CompleteParams{
+		VisitID:     state.CurrentStep.VisitID,
+		ActionID:    actionNamed(t, state, "approve"),
+		CompletedBy: "user:dana",
+		Remark:      ptr("Approved, flagging the Q3 overage to finance."),
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// The second step completes without one: a remark is optional at completion.
+	if _, err := engine.CompleteStep(ctx, CompleteParams{
+		VisitID:     state.CurrentStep.VisitID,
+		ActionID:    actionNamed(t, state, "approve"),
+		CompletedBy: "agent:policy@v2",
+	}); err != nil {
+		t.Fatalf("Complete without a remark: %v", err)
+	}
+
+	history, err := engine.GetHistory(ctx, "expense:4471", definition.ID)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+
+	if len(history) != 2 {
+		t.Fatalf("history has %d visits, want 2", len(history))
+	}
+
+	first := history[0].Completion
+	if first == nil || first.Remark == nil {
+		t.Fatalf("first visit's remark = %v, want the stamped text", first)
+	}
+
+	if *first.Remark != "Approved, flagging the Q3 overage to finance." {
+		t.Errorf("remark = %q, want the stamped text", *first.Remark)
+	}
+
+	if second := history[1].Completion; second == nil || second.Remark != nil {
+		t.Errorf("second visit's remark = %v, want nil", second)
+	}
+}
+
+// The cap is a statement of intent, so it is worth a test that fixes the number:
+// 3000 characters is a page, and 3001 is not a remark.
+func TestCompleteRejectsAnOversizeRemark(t *testing.T) {
+	engine, catalog := newEngine(t)
+	definition, _ := twoStepDefinition("expense approval")
+	ctx := context.Background()
+
+	state := startRun(t, engine, catalog, definition, "expense:4471")
+
+	_, err := engine.CompleteStep(ctx, CompleteParams{
+		VisitID:     state.CurrentStep.VisitID,
+		ActionID:    actionNamed(t, state, "approve"),
+		CompletedBy: "user:dana",
+		Remark:      ptr(strings.Repeat("x", 3001)),
+	})
+	if !errors.Is(err, ErrInvalidRemark) {
+		t.Fatalf("3001 characters: want ErrInvalidRemark, got %v", err)
+	}
+
+	// The visit is still open: a rejected completion changes nothing.
+	if _, err := engine.CompleteStep(ctx, CompleteParams{
+		VisitID:     state.CurrentStep.VisitID,
+		ActionID:    actionNamed(t, state, "approve"),
+		CompletedBy: "user:dana",
+		Remark:      ptr(strings.Repeat("x", 3000)),
+	}); err != nil {
+		t.Fatalf("3000 characters must be accepted: %v", err)
 	}
 }
 
