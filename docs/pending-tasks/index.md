@@ -4,4 +4,5 @@ Details for work that is not started or not completed yet are stored in md files
 
 Permanent project state lives in [status.md](../status.md), not here.
 
+- [Candidates](candidates.md) — open items and ideas, gathered from the docs and conversation. Not a plan, and nothing here is committed to.
 - [Iteration 2 — AI review steps](iteration-2-ai-review-steps.md) — the agreed plan, what decisions 39-43 settled, and a scenario to test the build against.
