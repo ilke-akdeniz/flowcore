@@ -22,6 +22,7 @@ type stepVisitRow struct {
 	CompletedBy         *string
 	SelectedActionID    *uuid.UUID
 	SubjectVersionToken *string
+	Remark              *string
 }
 
 // insertStepVisit opens a visit: the run has just entered this step. EnteredAt
@@ -35,8 +36,8 @@ func insertStepVisit(ctx context.Context, q querier, visit stepVisitRow) error {
 	_, err := q.Exec(ctx,
 		`insert into flowcore.step_visit
 		 (id, workflow_id, step_id, assignee_id, entered_at,
-		  completed_at, completed_by, selected_action_id, subject_version_token)
-		 values ($1, $2, $3, $4, now(), null, null, null, null)`,
+		  completed_at, completed_by, selected_action_id, subject_version_token, remark)
+		 values ($1, $2, $3, $4, now(), null, null, null, null, null)`,
 		visit.ID,
 		visit.WorkflowID,
 		visit.StepID,
@@ -65,15 +66,17 @@ func completeStepVisit(
 	completedBy string,
 	actionID uuid.UUID,
 	subjectVersionToken *string,
+	remark *string,
 ) (stepVisitRow, error) {
 	var visit stepVisitRow
 	err := q.QueryRow(ctx,
 		`update flowcore.step_visit
-		 set completed_at = now(), completed_by = $2, selected_action_id = $3, subject_version_token = $4
+		 set completed_at = now(), completed_by = $2, selected_action_id = $3,
+		     subject_version_token = $4, remark = $5
 		 where id = $1 and completed_at is null
 		 returning id, workflow_id, step_id, assignee_id, entered_at,
-		           completed_at, completed_by, selected_action_id, subject_version_token`,
-		visitID, completedBy, actionID, subjectVersionToken).Scan(
+		           completed_at, completed_by, selected_action_id, subject_version_token, remark`,
+		visitID, completedBy, actionID, subjectVersionToken, remark).Scan(
 		&visit.ID,
 		&visit.WorkflowID,
 		&visit.StepID,
@@ -82,7 +85,8 @@ func completeStepVisit(
 		&visit.CompletedAt,
 		&visit.CompletedBy,
 		&visit.SelectedActionID,
-		&visit.SubjectVersionToken)
+		&visit.SubjectVersionToken,
+		&visit.Remark)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stepVisitRow{}, closedOrMissingVisit(ctx, q, visitID)
 	}
@@ -112,7 +116,7 @@ func getStepVisit(ctx context.Context, q querier, id uuid.UUID) (stepVisitRow, e
 	var visit stepVisitRow
 	err := q.QueryRow(ctx,
 		`select id, workflow_id, step_id, assignee_id, entered_at,
-		        completed_at, completed_by, selected_action_id, subject_version_token
+		        completed_at, completed_by, selected_action_id, subject_version_token, remark
 		 from flowcore.step_visit where id = $1`,
 		id).Scan(
 		&visit.ID,
@@ -123,7 +127,8 @@ func getStepVisit(ctx context.Context, q querier, id uuid.UUID) (stepVisitRow, e
 		&visit.CompletedAt,
 		&visit.CompletedBy,
 		&visit.SelectedActionID,
-		&visit.SubjectVersionToken)
+		&visit.SubjectVersionToken,
+		&visit.Remark)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stepVisitRow{}, &NotFoundError{Entity: entityStepVisit, ID: id}
 	}
@@ -148,7 +153,7 @@ func listStepVisits(ctx context.Context, q querier, workflowID uuid.UUID) ([]Ste
 	rows, err := q.Query(ctx,
 		`select v.id, v.step_id, s.name, v.assignee_id, v.entered_at,
 		        v.completed_at, v.completed_by, v.selected_action_id, a.name,
-		        v.subject_version_token
+		        v.subject_version_token, v.remark
 		 from flowcore.step_visit v
 		 join flowcore.step s on s.id = v.step_id
 		 left join flowcore.action a on a.id = v.selected_action_id
@@ -182,6 +187,7 @@ func rowToStepVisit(row pgx.CollectableRow) (StepVisit, error) {
 		selectedActionID    *uuid.UUID
 		selectedActionName  *string
 		subjectVersionToken *string
+		remark              *string
 	)
 
 	err := row.Scan(
@@ -194,7 +200,8 @@ func rowToStepVisit(row pgx.CollectableRow) (StepVisit, error) {
 		&completedBy,
 		&selectedActionID,
 		&selectedActionName,
-		&subjectVersionToken)
+		&subjectVersionToken,
+		&remark)
 	if err != nil {
 		return StepVisit{}, err
 	}
@@ -206,8 +213,115 @@ func rowToStepVisit(row pgx.CollectableRow) (StepVisit, error) {
 			ActionID:            *selectedActionID,
 			ActionName:          *selectedActionName,
 			SubjectVersionToken: subjectVersionToken,
+			Remark:              remark,
 		}
 	}
 
 	return visit, nil
+}
+
+// reassignStepVisit moves an open visit to a different assignee. It returns the
+// updated row so a caller learns the run and step without a second read.
+//
+// Only an open visit can be reassigned, and the `completed_at is null` predicate
+// is the gate for the same reason it is in completeStepVisit: the check and the
+// write are one statement, so there is no window between them. A closed visit is
+// never rewritten, which is what keeps "who was this assigned to when they
+// decided" answerable for every past decision.
+//
+// Zero rows is ambiguous in exactly the way completion's is — unknown id versus
+// already closed — and is resolved by the same helper.
+//
+// There is no unassign: assigneeID is a required value, and an empty one fails
+// ck_step_visit_assignee_len. NULL would remove the row from every worklist, since
+// `assignee_id = any($1)` matches no NULL, so unassigning would hide live work
+// rather than release it.
+//
+// Reassignment keeps no history. The column records who holds the visit now, and
+// a run reassigned twice reports only the last hop; the decision-time assignee is
+// preserved instead by the visit being frozen at completion.
+func reassignStepVisit(ctx context.Context, q querier, visitID uuid.UUID, assigneeID string) (stepVisitRow, error) {
+	var visit stepVisitRow
+	err := q.QueryRow(ctx,
+		`update flowcore.step_visit
+		 set assignee_id = $2
+		 where id = $1 and completed_at is null
+		 returning id, workflow_id, step_id, assignee_id, entered_at,
+		           completed_at, completed_by, selected_action_id, subject_version_token, remark`,
+		visitID, assigneeID).Scan(
+		&visit.ID,
+		&visit.WorkflowID,
+		&visit.StepID,
+		&visit.AssigneeID,
+		&visit.EnteredAt,
+		&visit.CompletedAt,
+		&visit.CompletedBy,
+		&visit.SelectedActionID,
+		&visit.SubjectVersionToken,
+		&visit.Remark)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return stepVisitRow{}, closedOrMissingVisit(ctx, q, visitID)
+	}
+
+	if err != nil {
+		return stepVisitRow{}, mapWriteErr(err, "")
+	}
+
+	return visit, nil
+}
+
+// listAssignedSteps returns the open visits assigned to any of the given
+// references — the worklist, "what is waiting on me". The caller resolves who
+// "me" is: typically a user id plus their group memberships, all opaque.
+//
+// `assignee_id = any($1)` against the partial index ix_step_visit_open_assignee is
+// the whole query. Decision 25 measured it at 0.06 ms / 70 buffers, against
+// 19.6 ms / 6,591 for the join it replaces; decision 28 chose the two-column
+// assignee model partly to keep this a probe rather than a coalesce across a join.
+//
+// Unlike listStepVisits this spans workflows, so each row carries its run's
+// identity and subject. The joins are one-to-one — a visit has one step and one
+// workflow — so there is no fan-out, and the actions are deliberately absent.
+//
+// Ordering is oldest first, which is the order a queue is worked in. An empty set
+// of references returns no rows rather than everything, which `any` gives for
+// free: matching nothing is the right answer to asking about nobody.
+func listAssignedSteps(ctx context.Context, q querier, assigneeReferences []string) ([]AssignedStep, error) {
+	rows, err := q.Query(ctx,
+		`select v.id, v.step_id, s.name, v.assignee_id, v.entered_at,
+		        w.id, w.workflow_definition_id, w.name, w.subject_reference
+		 from flowcore.step_visit v
+		 join flowcore.step s on s.id = v.step_id
+		 join flowcore.workflow w on w.id = v.workflow_id
+		 where v.completed_at is null and v.assignee_id = any($1)
+		 order by v.entered_at, v.id`,
+		assigneeReferences)
+	if err != nil {
+		return nil, err
+	}
+
+	assigned, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (AssignedStep, error) {
+		var step AssignedStep
+		err := row.Scan(
+			&step.VisitID,
+			&step.StepID,
+			&step.StepName,
+			&step.AssigneeID,
+			&step.EnteredAt,
+			&step.WorkflowID,
+			&step.WorkflowDefinitionID,
+			&step.WorkflowName,
+			&step.SubjectReference)
+
+		return step, err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if assigned == nil {
+		assigned = []AssignedStep{}
+	}
+
+	return assigned, nil
 }

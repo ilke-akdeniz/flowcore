@@ -93,7 +93,7 @@ func (e *Engine) CompleteStep(ctx context.Context, params CompleteParams) (Workf
 	// The conditional update is the gate: it closes the visit only if it was open,
 	// so nothing below runs against a run someone else already advanced.
 	closed, err := completeStepVisit(ctx, tx,
-		params.VisitID, params.CompletedBy, params.ActionID, params.SubjectVersionToken)
+		params.VisitID, params.CompletedBy, params.ActionID, params.SubjectVersionToken, params.Remark)
 	if err != nil {
 		return WorkflowState{}, err
 	}
