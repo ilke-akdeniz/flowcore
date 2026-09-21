@@ -145,7 +145,7 @@ _Step Definition_
 - workflow definition id
 - actions
 - workflow status definition id
-- assignee_id // opaque reference to the person or group expected to act on this step. A default, copied to the Step at workflow start.
+- assignee_id // opaque reference to the person or group expected to act on this step. Required — a step with no decided owner carries a value saying so, chosen by the client. A default, copied to the Step at workflow start.
 
 _Action Definition_
 
@@ -176,7 +176,7 @@ _Step_ (snapshot)
 - step definition id // provenance
 - name // frozen
 - workflow status definition id + workflow status name // frozen; the status the run shows while sitting on this step
-- assignee_id // the frozen _default_, copied from StepDefinition at start, immutable thereafter
+- assignee_id // the frozen _default_, copied from StepDefinition at start, immutable thereafter. Required, since its source is.
 - actions
 
 _Action_ (snapshot)
@@ -194,7 +194,7 @@ _Step Visit_
 - id
 - workflow id
 - step id
-- assignee_id // the live assignee for _this visit_, seeded from the step's frozen default on entry, mutable afterwards (reassignment)
+- assignee_id // the live assignee for _this visit_, seeded from the step's frozen default on entry, mutable afterwards (reassignment). Required: reassignment takes a value, so no write can clear it.
 - entered_at
 - completed_at, completed_by, selectedAction // all three set together or none of them; a half-stamped visit is unrepresentable
 - subjectVersionToken // stamped at completion, from the value the caller supplies
@@ -429,6 +429,11 @@ So the library records identity and does not enforce it, mirroring the subject-t
 Assignment still earns its place in the library through the worklist query — the client resolves the user's memberships and passes the resulting set, and the library filters on it.
 
 Definition assigneeId is a default; instance assigneeId is the truth, and is mutable so steps can be reassigned.
+
+An assignee is required at all three levels, and there is no unassigned state.
+The column is an opaque string the library never interprets, so a step whose owner is undecided says so with a value the client chooses — `unassigned`, `pool:support`, `system:auto` — and every such value is findable.
+NULL is not: the worklist matches with `assignee_id = any($1)`, which NULL never satisfies, so an unassigned visit would be open, completable, and in nobody's queue.
+Reassignment can move work between assignees but cannot remove one.
 
 If engine-side enforcement is wanted later, the shape is a client-supplied check invoked before completion (canComplete(step, actorId)), not an equality test — enforcement at the library's gate, judgment in client code.
 This changes no tables and can be added when a real need appears.

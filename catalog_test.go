@@ -71,7 +71,7 @@ func TestCreateGeneratesMissingIDsAndPreservesSupplied(t *testing.T) {
 		Name:     "Generated",
 		Statuses: []WorkflowStatusDefinition{{ID: sid, Name: "s"}},
 		Steps: []StepDefinition{
-			{WorkflowStatusDefinitionID: sid, Name: "only", Actions: []ActionDefinition{
+			{WorkflowStatusDefinitionID: sid, Name: "only", AssigneeID: "group:only", Actions: []ActionDefinition{
 				{Name: "end", TerminalWorkflowStatusDefinitionID: &sid},
 			}},
 		},
@@ -170,7 +170,7 @@ func TestGetLoadedButEmptyActionsIsNonNil(t *testing.T) {
 	definition := WorkflowDefinition{
 		Name: "Empty actions", InitialStepDefinitionID: &stepID,
 		Statuses: []WorkflowStatusDefinition{{ID: sid, Name: "s"}},
-		Steps:    []StepDefinition{{ID: stepID, WorkflowStatusDefinitionID: sid, Name: "lonely"}},
+		Steps:    []StepDefinition{{ID: stepID, WorkflowStatusDefinitionID: sid, Name: "lonely", AssigneeID: "group:lonely"}},
 	}
 	created := mustCreate(t, catalog, definition)
 

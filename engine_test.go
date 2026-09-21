@@ -440,8 +440,8 @@ func TestCompleteSeedsTheAssigneeFromTheSnapshotDefault(t *testing.T) {
 	definition, _ := loopingDefinition("rework loop")
 
 	state := startRun(t, engine, catalog, definition, "doc-1")
-	if state.CurrentStep.AssigneeID == nil || *state.CurrentStep.AssigneeID != "group:manager" {
-		t.Fatalf("entry visit assignee = %v, want group:manager", state.CurrentStep.AssigneeID)
+	if state.CurrentStep.AssigneeID != "group:manager" {
+		t.Fatalf("entry visit assignee = %q, want group:manager", state.CurrentStep.AssigneeID)
 	}
 
 	state, err := engine.CompleteStep(ctx, CompleteParams{
@@ -452,8 +452,8 @@ func TestCompleteSeedsTheAssigneeFromTheSnapshotDefault(t *testing.T) {
 		t.Fatalf("Complete: %v", err)
 	}
 
-	if state.CurrentStep.AssigneeID == nil || *state.CurrentStep.AssigneeID != "group:director" {
-		t.Errorf("next visit assignee = %v, want group:director", state.CurrentStep.AssigneeID)
+	if state.CurrentStep.AssigneeID != "group:director" {
+		t.Errorf("next visit assignee = %q, want group:director", state.CurrentStep.AssigneeID)
 	}
 }
 

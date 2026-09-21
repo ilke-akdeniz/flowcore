@@ -29,7 +29,7 @@ func TestDuplicateNameMapping(t *testing.T) {
 	}
 
 	// step: "manager review" already exists.
-	if _, err := catalog.AddStep(ctx, ids.workflow, AddStepParams{Name: "Manager Review", StatusID: ids.status}); !errors.Is(err, ErrDuplicateName) {
+	if _, err := catalog.AddStep(ctx, ids.workflow, AddStepParams{Name: "Manager Review", StatusID: ids.status, AssigneeID: "group:manager"}); !errors.Is(err, ErrDuplicateName) {
 		t.Errorf("step dup: want ErrDuplicateName, got %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestCrossDefinitionMapping(t *testing.T) {
 	mustCreate(t, catalog, definitionB)
 
 	// fk_step_definition_status: B's step using A's status.
-	if _, err := catalog.AddStep(ctx, b.workflow, AddStepParams{Name: "x", StatusID: a.status}); !errors.Is(err, ErrCrossDefinition) {
+	if _, err := catalog.AddStep(ctx, b.workflow, AddStepParams{Name: "x", StatusID: a.status, AssigneeID: "group:x"}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def step status: want ErrCrossDefinition, got %v", err)
 	}
 
@@ -105,7 +105,7 @@ func TestCrossDefinitionMappingOnUpdate(t *testing.T) {
 		UpdateStepParams{
 			Name:       "Manager Review",
 			StatusID:   a.status,
-			AssigneeID: Clear[string](),
+			AssigneeID: "group:manager",
 		}); !errors.Is(err, ErrCrossDefinition) {
 		t.Errorf("cross-def step status on update: want ErrCrossDefinition, got %v", err)
 	}
@@ -167,8 +167,9 @@ func TestCascadeDriverFKMapsToNotFound(t *testing.T) {
 		ctx,
 		missing,
 		AddStepParams{
-			Name:     "orphan",
-			StatusID: missing,
+			Name:       "orphan",
+			StatusID:   missing,
+			AssigneeID: "group:orphan",
 		})
 	if !errors.As(err, &notFoundErr) || notFoundErr.Entity != entityWorkflowDefinition {
 		t.Errorf("AddStep with missing definition: want NotFoundError on the definition, got %v", err)
@@ -211,11 +212,11 @@ func TestReferencedDeleteMapping(t *testing.T) {
 		ID: definitionID, Name: "Referenced", InitialStepDefinitionID: &entryStepID,
 		Statuses: []WorkflowStatusDefinition{{ID: stepStatusID, Name: "working"}, {ID: terminalStatusID, Name: "done"}},
 		Steps: []StepDefinition{
-			{ID: entryStepID, WorkflowStatusDefinitionID: stepStatusID, Name: "first", Actions: []ActionDefinition{
+			{ID: entryStepID, WorkflowStatusDefinitionID: stepStatusID, Name: "first", AssigneeID: "group:first", Actions: []ActionDefinition{
 				{Name: "go", NextStepDefinitionID: &secondStepID},
 				{Name: "finish", TerminalWorkflowStatusDefinitionID: &terminalStatusID},
 			}},
-			{ID: secondStepID, WorkflowStatusDefinitionID: stepStatusID, Name: "second"},
+			{ID: secondStepID, WorkflowStatusDefinitionID: stepStatusID, Name: "second", AssigneeID: "group:second"},
 		},
 	}
 	mustCreate(t, catalog, definition)

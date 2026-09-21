@@ -64,10 +64,10 @@ type CurrentStep struct {
 	VisitID uuid.UUID
 	Name    string
 	// AssigneeID is the live assignee for this visit, seeded from the step's
-	// frozen default when the run entered it. Opaque: nil means unassigned, and
-	// the library never interprets a non-nil value or checks it against whoever
-	// completes the step.
-	AssigneeID *string
+	// frozen default when the run entered it and always present. Opaque: the
+	// library never interprets it, and never checks it against whoever completes
+	// the step.
+	AssigneeID string
 	EnteredAt  time.Time
 	// Actions is the set of choices available here, frozen at start. Empty means
 	// the run cannot advance — a dead end in the definition it started from.
@@ -82,6 +82,47 @@ type Action struct {
 	Name string
 }
 
+// AssignedStep is one piece of open work in a worklist: a visit waiting on someone,
+// with enough of its run attached to be shown in a list and acted on.
+//
+// It is the third projection here, and the only one that spans runs. WorkflowState
+// and StepVisit answer questions about *a* workflow, so the caller already knows
+// which one; a worklist answers "what is waiting on me" across every run at once,
+// so each row has to say which workflow it came from and what subject it concerns.
+// That is why the workflow fields below are here and absent from CurrentStep.
+//
+// AssigneeID is returned rather than assumed because a caller typically asks about
+// itself and several groups at once, and which reference matched is the difference
+// between "yours" and "your team's".
+//
+// No actions. A worklist is a list view — it answers how much is waiting, not what
+// the choices are on each item — and carrying them would fan the query out to one
+// row per action across every open item. A caller that needs the choices for one
+// row has the run and calls GetState. Adding the field later would not break a
+// client; removing it would.
+type AssignedStep struct {
+	// VisitID is what CompleteStep and Reassign act on.
+	VisitID uuid.UUID
+	// StepID is the snapshot step; StepName is its name, frozen at start.
+	StepID     uuid.UUID
+	StepName   string
+	AssigneeID string
+	// EnteredAt is when the run arrived here, which is what makes "waiting
+	// longest" sortable by the caller without a second query.
+	EnteredAt time.Time
+
+	WorkflowID uuid.UUID
+	// WorkflowDefinitionID names the definition this run started from. It is what
+	// distinguishes two runs of different definitions on one subject, which the
+	// one-active-run rule permits.
+	WorkflowDefinitionID uuid.UUID
+	WorkflowName         string
+	// SubjectReference is what the work is about, opaque and uninterpreted. A
+	// worklist is unusable without it: it is how the caller resolves the row back
+	// to the thing a person is being asked to look at.
+	SubjectReference string
+}
+
 // StepVisit is one entry into a step: who was expected to act, when the run
 // arrived, and — once it has happened — what they decided.
 //
@@ -94,7 +135,7 @@ type StepVisit struct {
 	// StepID is the snapshot step; StepName is its name, frozen at start.
 	StepID     uuid.UUID
 	StepName   string
-	AssigneeID *string
+	AssigneeID string
 	EnteredAt  time.Time
 	// Completion is nil while the visit is open, and set once. Grouping these
 	// fields behind one pointer mirrors the schema, where completion time,
@@ -119,4 +160,14 @@ type Completion struct {
 	// as supplied by the caller. Nil when the client does not version its
 	// subjects; the library never compares or interprets it.
 	SubjectVersionToken *string
+	// Remark is the completer's own account of this decision — an agent's
+	// findings, a human's reason — as supplied by the caller and never
+	// interpreted. Nil when none was given.
+	//
+	// It sits here rather than on StepVisit because it belongs to the completion:
+	// optional when one happens, and impossible without one, both enforced by the
+	// schema. Like everything else in this struct it is written once and never
+	// rewritten, on the same terms — the visit is append-only in effect, because
+	// no method rewrites a closed one, not because a constraint forbids it.
+	Remark *string
 }

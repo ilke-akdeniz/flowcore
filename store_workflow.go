@@ -109,10 +109,14 @@ func getWorkflowIDBySubject(ctx context.Context, q querier, subjectReference str
 // steps with Actions unloaded.
 func getWorkflowState(ctx context.Context, q querier, workflowID uuid.UUID) (WorkflowState, error) {
 	var (
-		state          WorkflowState
-		visitID        *uuid.UUID
-		stepID         *uuid.UUID
-		stepName       *string
+		state    WorkflowState
+		visitID  *uuid.UUID
+		stepID   *uuid.UUID
+		stepName *string
+		// Every one of these is a pointer because the open-visit join is a LEFT
+		// JOIN: a finished run has no open visit, so the whole group scans as NULL
+		// even though none of the columns is nullable. They are dereferenced only
+		// under visitID != nil, which is exactly when the join matched.
 		stepAssigneeID *string
 		enteredAt      *time.Time
 	)
@@ -154,7 +158,7 @@ func getWorkflowState(ctx context.Context, q querier, workflowID uuid.UUID) (Wor
 			ID:         *stepID,
 			VisitID:    *visitID,
 			Name:       *stepName,
-			AssigneeID: stepAssigneeID,
+			AssigneeID: *stepAssigneeID,
 			EnteredAt:  *enteredAt,
 		}
 	}

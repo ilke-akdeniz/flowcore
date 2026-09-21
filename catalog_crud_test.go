@@ -18,7 +18,7 @@ func TestAddStepReturnsEmptyNonNilActions(t *testing.T) {
 		AddStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
-			AssigneeID: ptr("group:vp"),
+			AssigneeID: "group:vp",
 		})
 	if err != nil {
 		t.Fatalf("AddStep: %v", err)
@@ -28,8 +28,8 @@ func TestAddStepReturnsEmptyNonNilActions(t *testing.T) {
 		t.Errorf("AddStep Actions = %v, want empty non-nil", step.Actions)
 	}
 
-	if step.AssigneeID == nil || *step.AssigneeID != "group:vp" {
-		t.Errorf("AssigneeID = %v, want group:vp", step.AssigneeID)
+	if step.AssigneeID != "group:vp" {
+		t.Errorf("AssigneeID = %q, want group:vp", step.AssigneeID)
 	}
 }
 
@@ -39,12 +39,12 @@ func TestUpdateStepFullReplaceAndActionRefetch(t *testing.T) {
 	definition, ids := twoStepDefinition("UpdateStep")
 	mustCreate(t, catalog, definition)
 
-	// manager review starts with an assignee via a fresh add so we can watch it clear.
+	// A fresh add with a known assignee, so the replace below is visible.
 	step, err := catalog.AddStep(ctx, ids.workflow,
 		AddStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
-			AssigneeID: ptr("group:vp"),
+			AssigneeID: "group:vp",
 		})
 	if err != nil {
 		t.Fatalf("AddStep: %v", err)
@@ -54,15 +54,15 @@ func TestUpdateStepFullReplaceAndActionRefetch(t *testing.T) {
 		t.Fatalf("AddAction: %v", err)
 	}
 
-	// Full replace: new name, same status, assignee cleared — but only because
-	// Clear says so. Omitting the field is rejected, not treated as a clear.
+	// Full replace: new name, same status, new assignee. Every column the params
+	// list is written, so all three are this call's own values.
 	updated, err := catalog.UpdateStep(
 		ctx,
 		step.ID,
 		UpdateStepParams{
 			Name:       "VP Review",
 			StatusID:   ids.status,
-			AssigneeID: Clear[string](),
+			AssigneeID: "group:cfo",
 		})
 	if err != nil {
 		t.Fatalf("UpdateStep: %v", err)
@@ -72,8 +72,8 @@ func TestUpdateStepFullReplaceAndActionRefetch(t *testing.T) {
 		t.Errorf("name = %q, want VP Review", updated.Name)
 	}
 
-	if updated.AssigneeID != nil {
-		t.Errorf("assignee = %v, want nil (Clear)", *updated.AssigneeID)
+	if updated.AssigneeID != "group:cfo" {
+		t.Errorf("assignee = %q, want group:cfo", updated.AssigneeID)
 	}
 
 	// Actions re-fetched and populated on return.
@@ -122,7 +122,7 @@ func TestToUpdateRoundTrip(t *testing.T) {
 		AddStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
-			AssigneeID: ptr("group:vp"),
+			AssigneeID: "group:vp",
 		})
 	if err != nil {
 		t.Fatalf("AddStep: %v", err)
@@ -136,19 +136,24 @@ func TestToUpdateRoundTrip(t *testing.T) {
 		t.Fatalf("UpdateStep: %v", err)
 	}
 
-	if renamed.AssigneeID == nil {
+	if renamed.AssigneeID == "" {
 		t.Fatal("assignee was lost renaming through ToUpdate; it must be carried forward")
 	}
 
-	if *renamed.AssigneeID != "group:vp" {
-		t.Errorf("assignee = %q, want group:vp", *renamed.AssigneeID)
+	if renamed.AssigneeID != "group:vp" {
+		t.Errorf("assignee = %q, want group:vp", renamed.AssigneeID)
 	}
 }
 
-// TestUpdateStepRejectsUndecidedAssignee is the regression guard for the failure
+// TestUpdateStepRejectsEmptyAssignee is the regression guard for the failure
 // decision 21 recorded: params built by hand, omitting AssigneeID, used to clear
-// the column silently. It must now fail before any write.
-func TestUpdateStepRejectsUndecidedAssignee(t *testing.T) {
+// the column silently. It must fail loudly and change nothing.
+//
+// The mechanism changed and the guarantee did not. It used to be a pre-flight
+// check on a Nullable field; now the column is NOT NULL and an omitted field is
+// the empty string, which fails ck_step_definition_assignee_len. A constraint at
+// the source replaced machinery at the call site.
+func TestUpdateStepRejectsEmptyAssignee(t *testing.T) {
 	catalog := newCatalog(t)
 	ctx := context.Background()
 	definition, ids := twoStepDefinition("Undecided")
@@ -160,7 +165,7 @@ func TestUpdateStepRejectsUndecidedAssignee(t *testing.T) {
 		AddStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
-			AssigneeID: ptr("group:vp"),
+			AssigneeID: "group:vp",
 		})
 	if err != nil {
 		t.Fatalf("AddStep: %v", err)
@@ -168,20 +173,20 @@ func TestUpdateStepRejectsUndecidedAssignee(t *testing.T) {
 
 	_, err = catalog.UpdateStep(ctx, step.ID, UpdateStepParams{Name: "VP Review", StatusID: ids.status})
 
-	var fieldErr *FieldNotSetError
-	if !errors.As(err, &fieldErr) {
-		t.Fatalf("want *FieldNotSetError, got %v", err)
+	var identifierErr *InvalidIdentifierError
+	if !errors.As(err, &identifierErr) {
+		t.Fatalf("want *InvalidIdentifierError, got %v", err)
 	}
 
-	if !errors.Is(err, ErrFieldNotSet) {
-		t.Errorf("want errors.Is(err, ErrFieldNotSet)")
+	if !errors.Is(err, ErrInvalidIdentifier) {
+		t.Errorf("want errors.Is(err, ErrInvalidIdentifier)")
 	}
 
-	if fieldErr.Field != "UpdateStepParams.AssigneeID" {
-		t.Errorf("Field = %q, want UpdateStepParams.AssigneeID", fieldErr.Field)
+	if identifierErr.Field != "assigneeId" {
+		t.Errorf("Field = %q, want assigneeId", identifierErr.Field)
 	}
 
-	// Rejected before the database was touched: nothing changed.
+	// The statement was rejected, so nothing changed.
 	unchanged, err := catalog.Get(ctx, ids.workflow)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -196,7 +201,7 @@ func TestUpdateStepRejectsUndecidedAssignee(t *testing.T) {
 			t.Errorf("name = %q, want unchanged", s.Name)
 		}
 
-		if s.AssigneeID == nil || *s.AssigneeID != "group:vp" {
+		if s.AssigneeID != "group:vp" {
 			t.Error("assignee was modified by a rejected update")
 		}
 	}
@@ -216,7 +221,7 @@ func TestUpdateStepSetToReplacesAssignee(t *testing.T) {
 		AddStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
-			AssigneeID: ptr("group:vp"),
+			AssigneeID: "group:vp",
 		})
 	if err != nil {
 		t.Fatalf("AddStep: %v", err)
@@ -228,14 +233,14 @@ func TestUpdateStepSetToReplacesAssignee(t *testing.T) {
 		UpdateStepParams{
 			Name:       "vp review",
 			StatusID:   ids.status,
-			AssigneeID: SetTo("group:cfo"),
+			AssigneeID: "group:cfo",
 		})
 	if err != nil {
 		t.Fatalf("UpdateStep: %v", err)
 	}
 
-	if updated.AssigneeID == nil || *updated.AssigneeID != "group:cfo" {
-		t.Errorf("assignee = %v, want group:cfo", updated.AssigneeID)
+	if updated.AssigneeID != "group:cfo" {
+		t.Errorf("assignee = %q, want group:cfo", updated.AssigneeID)
 	}
 }
 
@@ -322,15 +327,15 @@ func TestNotFoundOnMissingTargets(t *testing.T) {
 		{"UpdateStatus", func() error { _, e := catalog.UpdateStatus(ctx, missing, UpdateStatusParams{Name: "x"}); return e }},
 		{"DeleteStatus", func() error { return catalog.DeleteStatus(ctx, missing) }},
 		{"UpdateStep", func() error {
-			// AssigneeID must be decided even here: validation runs before the
-			// lookup, so an undecided field would mask the not-found this asserts.
+			// AssigneeID must be non-empty even here: an empty one fails the
+			// column's length CHECK, which would mask the not-found this asserts.
 			_, e := catalog.UpdateStep(
 				ctx,
 				missing,
 				UpdateStepParams{
 					Name:       "x",
 					StatusID:   missing,
-					AssigneeID: Clear[string](),
+					AssigneeID: "group:vp",
 				})
 			return e
 		}},
@@ -342,7 +347,7 @@ func TestNotFoundOnMissingTargets(t *testing.T) {
 		{"DeleteAction", func() error { return catalog.DeleteAction(ctx, missing) }},
 		{"AddStatus (missing definition)", func() error { _, e := catalog.AddStatus(ctx, missing, AddStatusParams{Name: "x"}); return e }},
 		{"AddStep (missing definition)", func() error {
-			_, e := catalog.AddStep(ctx, missing, AddStepParams{Name: "x", StatusID: missing})
+			_, e := catalog.AddStep(ctx, missing, AddStepParams{Name: "x", StatusID: missing, AssigneeID: "group:x"})
 			return e
 		}},
 		{"AddAction (missing step)", func() error {

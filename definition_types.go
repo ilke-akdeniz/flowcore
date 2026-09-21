@@ -31,14 +31,16 @@ type WorkflowStatusDefinition struct {
 }
 
 // StepDefinition is one step in a workflow: the status a run shows while on it,
-// an optional default assignee, and the actions that leave it.
+// the default assignee, and the actions that leave it.
 type StepDefinition struct {
 	ID                         uuid.UUID
 	WorkflowDefinitionID       uuid.UUID
 	WorkflowStatusDefinitionID uuid.UUID
 	// AssigneeID is an opaque reference to the person or group expected to act
-	// on this step. The library never interprets it. Nil means unassigned.
-	AssigneeID *string
+	// on this step. The library never interprets it, and it is always present —
+	// a step with no decided owner carries a value saying so, chosen by the
+	// client, rather than an absent one no worklist could find.
+	AssigneeID string
 	Name       string
 	// Actions is the set of actions leaving this step. Loaded by Get and by the
 	// mutating methods on return. An empty non-nil slice means "loaded, no
@@ -95,15 +97,10 @@ func (s WorkflowStatusDefinition) ToUpdate() UpdateStatusParams {
 // they list; starting from ToUpdate carries the stored assignee forward so that
 // changing a step's name cannot unassign it as a side effect.
 func (s StepDefinition) ToUpdate() UpdateStepParams {
-	assignee := Clear[string]()
-	if s.AssigneeID != nil {
-		assignee = SetTo(*s.AssigneeID)
-	}
-
 	return UpdateStepParams{
 		Name:       s.Name,
 		StatusID:   s.WorkflowStatusDefinitionID,
-		AssigneeID: assignee,
+		AssigneeID: s.AssigneeID,
 	}
 }
 

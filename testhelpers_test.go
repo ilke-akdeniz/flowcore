@@ -168,13 +168,15 @@ func twoStepDefinition(name string) (WorkflowDefinition, definitionIDs) {
 			{ID: ids.rejectedStatus, Name: "rejected"},
 		},
 		Steps: []StepDefinition{
-			{ID: ids.managerStep, WorkflowStatusDefinitionID: ids.status, Name: "manager review", Actions: []ActionDefinition{
-				{Name: "approve", NextStepDefinitionID: &ids.directorStep},
-				{Name: "reject", TerminalWorkflowStatusDefinitionID: &ids.rejectedStatus},
-			}},
-			{ID: ids.directorStep, WorkflowStatusDefinitionID: ids.status, Name: "director review", Actions: []ActionDefinition{
-				{Name: "approve", TerminalWorkflowStatusDefinitionID: &ids.approvedStatus},
-			}},
+			{ID: ids.managerStep, WorkflowStatusDefinitionID: ids.status, Name: "manager review",
+				AssigneeID: "group:manager", Actions: []ActionDefinition{
+					{Name: "approve", NextStepDefinitionID: &ids.directorStep},
+					{Name: "reject", TerminalWorkflowStatusDefinitionID: &ids.rejectedStatus},
+				}},
+			{ID: ids.directorStep, WorkflowStatusDefinitionID: ids.status, Name: "director review",
+				AssigneeID: "group:director", Actions: []ActionDefinition{
+					{Name: "approve", TerminalWorkflowStatusDefinitionID: &ids.approvedStatus},
+				}},
 		},
 	}
 
@@ -205,12 +207,12 @@ func loopingDefinition(name string) (WorkflowDefinition, definitionIDs) {
 		},
 		Steps: []StepDefinition{
 			{ID: ids.managerStep, WorkflowStatusDefinitionID: ids.status, Name: "manager review",
-				AssigneeID: ptr("group:manager"),
+				AssigneeID: "group:manager",
 				Actions: []ActionDefinition{
 					{Name: "approve", NextStepDefinitionID: &ids.directorStep},
 				}},
 			{ID: ids.directorStep, WorkflowStatusDefinitionID: ids.status, Name: "director review",
-				AssigneeID: ptr("group:director"),
+				AssigneeID: "group:director",
 				Actions: []ActionDefinition{
 					{Name: "approve", TerminalWorkflowStatusDefinitionID: &approved},
 					// the cycle: back to where it came from

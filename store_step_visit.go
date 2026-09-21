@@ -16,7 +16,7 @@ type stepVisitRow struct {
 	ID                  uuid.UUID
 	WorkflowID          uuid.UUID
 	StepID              uuid.UUID
-	AssigneeID          *string
+	AssigneeID          string
 	EnteredAt           time.Time
 	CompletedAt         *time.Time
 	CompletedBy         *string

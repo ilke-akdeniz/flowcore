@@ -18,7 +18,7 @@ type stepRow struct {
 	Name                       string
 	WorkflowStatusDefinitionID uuid.UUID
 	WorkflowStatusName         string
-	AssigneeID                 *string
+	AssigneeID                 string
 }
 
 // insertStep writes one step of the snapshot. StepDefinitionID and the status id

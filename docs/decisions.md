@@ -1774,3 +1774,57 @@ A workflow library reimplementing those would be building a worse queue inside i
 
 Iteration 2 therefore builds nothing for dispatch or failure handling.
 Walking the whole of case 1 and 4 against what shipped in iteration 1 left exactly one gap — somewhere for the agent's findings and reasoning to live — which is decision 41.
+
+---
+
+## 44. `assignee_id` is required, and `Nullable[T]` goes with it
+
+**Context.**
+Settling the `Reassign` signature in iteration 2 raised whether reassigning to NULL — unassigning — is ever meaningful.
+It is not, and the owner pushed the question one level back: why was `assignee_id` nullable at all?
+
+Decision 9 states it in a single clause — "`assignee_id`: nullable text, no FK, no CHECK, nothing" — and its **Why** argues only the no-FK and no-CHECK parts.
+The nullability was never defended, and the schema comment in 00001 does not mention it either.
+The recalled reason was to let a definition be authored before its assignees were known.
+
+**Options.**
+Leave it nullable and document that NULL means invisible to the worklist.
+`not null` on all three levels.
+`not null` on the instance side only, with `Start` substituting a literal.
+
+**Decision.**
+`not null` on `step_definition.assignee_id`, `step.assignee_id`, and `step_visit.assignee_id` (migration 00005).
+`Nullable[T]`, `SetTo`, `Clear`, `FieldNotSetError`, and `ErrFieldNotSet` are removed.
+`AddStepParams.AssigneeID` and `UpdateStepParams.AssigneeID` become plain `string`, as do `StepDefinition.AssigneeID`, `CurrentStep.AssigneeID`, and `StepVisit.AssigneeID`.
+This supersedes decision 22 entirely and amends decision 21's account of which fields have a constraint backstop.
+
+**Why.**
+The column is an opaque string the library never interprets, so every "nobody in particular" case can be said with a value: `unassigned` while a definition is being authored, `pool:support` for a queue anyone may take, `system:auto` for a machine step.
+Each of those is **findable**.
+
+NULL is not.
+The worklist added in 00004 matches with `assignee_id = any($1)`, and NULL satisfies no such test — not even a wildcard.
+An unassigned visit would therefore be open, completable, and in nobody's queue: work that exists and cannot be found by the one query whose purpose is finding work.
+So nullability bought nothing a convention string does not buy better, and cost exactly that.
+
+It also dissolves the hazard decision 22 was built to guard.
+That decision is titled "`Nullable[T]` on the one params field a constraint does not protect", and this is that constraint — with `not null` plus the existing `ck_*_assignee_len` (1..500), a forgotten `AssigneeID` is the empty string, which fails loudly as `InvalidIdentifierError` before anything is written.
+A constraint at the source replaced machinery at the call site, and the machinery had exactly one user.
+
+The instance-side-only option was rejected as worse than either: it hides a default inside the Engine, so the value a run carries would not be traceable to anything the client wrote.
+
+**On the timing.**
+The change needs a value for every existing row, and there are none — no released version, no client databases.
+It will never be cheaper than it was, which is why it was taken now rather than noted for later.
+
+**Consequence.**
+There is no unassigned state at any level, and `Reassign` can move work between assignees but cannot remove one.
+`StepDefinition.ToUpdate()` loses its branch but keeps its purpose: Update is still a full replace, so building params by hand still overwrites the assignee — it now fails loudly instead of silently clearing.
+
+`getWorkflowState` still scans the visit columns into pointers, including the assignee, and that is not an oversight.
+Its open-visit join is a LEFT JOIN, so a finished run matches nothing and the whole group scans as NULL even though no column in it is nullable.
+The pointers are dereferenced only under `visitID != nil`, which is exactly when the join matched.
+This is the one place where "the column is NOT NULL" and "the scan target may be NULL" are both true, and it cost a test failure to notice.
+
+Four exported identifiers left the public API.
+That is a breaking change with no one to break, and the same timing argument covers it.
