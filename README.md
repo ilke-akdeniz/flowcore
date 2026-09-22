@@ -19,7 +19,7 @@ The test suite runs against Postgres 13 and 17.
 ## Install
 
 ```
-go get github.com/ilke-akdeniz/flowcore
+go get github.com/mike-akdeniz/flowcore
 ```
 
 ## Apply the schema

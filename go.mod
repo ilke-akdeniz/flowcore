@@ -1,4 +1,4 @@
-module github.com/ilke-akdeniz/flowcore
+module github.com/mike-akdeniz/flowcore
 
 go 1.25.7
 
