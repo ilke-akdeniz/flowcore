@@ -1,5 +1,7 @@
 # Binaries
+# Go names a binary after its directory, so each module's needs its own entry.
 /flowcore
+/client/client
 *.exe
 
 # Env / local secrets

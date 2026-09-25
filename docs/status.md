@@ -17,3 +17,6 @@ Claude can propose a change and say why; it never makes one unilaterally.
 - **Iteration 2** — *Complete*.
   AI review steps, the worklist, reassignment, and the completion remark.
   Detail in [pending-tasks/iteration-2-ai-review-steps.md](pending-tasks/iteration-2-ai-review-steps.md).
+- **Reference client** — *In progress*.
+  A working application built on the library: run it, read it, or fork it as a starting point.
+  Detail in [pending-tasks/client.md](pending-tasks/client.md).

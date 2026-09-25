@@ -137,6 +137,17 @@ The technique is slow by design.
 A review that is three typos and a rename is applied, not interviewed.
 The test is whether any item would change what the other items should be — where nothing depends on anything, there is no tree to walk, and an interview is ceremony.
 
+## Module boundary
+
+The rules above — the stack constraints, "not a service, web API, or application", no web frameworks — govern the **root module**, which is the library.
+
+`client/` is a separate module with its own `go.mod` and its own decision log at `client/docs/decisions.md`.
+It is FlowCore's reference client: an application built on the library, so it is an application on purpose and may depend on whatever it needs.
+Its plan is `docs/pending-tasks/client.md`.
+
+The exception runs one way only.
+Anything building the client reveals *about the library* is a FlowCore decision and belongs in `docs/decisions.md`, not the client's log — the client is the library's first real caller, so API friction it exposes is the library's to record and fix.
+
 ## Doc authority
 
 `docs/decisions.md` is authoritative for design reasoning.
