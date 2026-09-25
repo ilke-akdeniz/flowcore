@@ -42,6 +42,10 @@ type Session struct {
 	// holds only an opaque string like "s7f3a2:claim:C-1042" and never the claim
 	// itself, so somebody has to, and that somebody is the client.
 	Runs map[string]Run
+
+	// Tracer records what this application did and what it asked FlowCore, so the
+	// interface can show both sides of the boundary next to each other.
+	Tracer Tracer
 }
 
 // SubjectReference is what FlowCore records for a subject: opaque to the library,

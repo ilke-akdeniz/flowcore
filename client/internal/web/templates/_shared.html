@@ -1,42 +1,87 @@
 {{define "head"}}
 <!doctype html>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FlowCore reference client</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>
+  :root { --pico-font-size: 95%; }
+  main { padding-block: 1rem; }
+  .log { font-family: ui-monospace, monospace; font-size: .8rem; line-height: 1.5; }
+  .log li { list-style: none; margin: 0; }
+  .log .client  { color: var(--pico-muted-color); }
+  .log .call    { color: var(--pico-primary); font-weight: 600; }
+  .log .return  { color: var(--pico-primary); }
+  .log .title   { font-weight: 600; margin-block: .6rem .2rem; }
+  .side { color: var(--pico-muted-color); }
+  fieldset { border: 1px solid var(--pico-muted-border-color); padding: 1rem; border-radius: .4rem; }
+  .pre { white-space: pre-wrap; }
+</style>
+<main class="container">
 {{end}}
 
 {{define "whoami"}}
 <nav>
-  <strong>Acting as {{.Identity.Name}}</strong> — {{.Identity.Title}},
-  <code>{{.Identity.Reference}}</code>
-  {{if .Identity.Groups}}in {{range .Identity.Groups}}<code>{{.}}</code> {{end}}{{end}}
-  <form method="post" action="/identity" style="display:inline">
-    <input type="hidden" name="return" value="{{.Return}}">
-    <select name="reference">
-      {{range .Roster}}<option value="{{.Reference}}">{{.Name}} — {{.Title}}</option>{{end}}
-    </select>
-    <button type="submit">switch</button>
-  </form>
-  <br><small>Switching signs you in as someone else. FlowCore has no idea any of
-  this happened — it only ever sees the reference strings this application sends.</small>
+  <ul><li><strong>FlowCore</strong> <span class="side">reference client</span></li></ul>
+  <ul>
+    <li><a href="/">worklist</a></li>
+    <li><a href="/workflows">workflows</a></li>
+    <li>
+      <form method="post" action="/identity" style="margin:0">
+        <input type="hidden" name="return" value="{{.Return}}">
+        <select name="reference" onchange="this.form.submit()" aria-label="Acting as">
+          {{range .Roster}}
+          <option value="{{.Reference}}" {{if eq .Reference $.Identity.Reference}}selected{{end}}>
+            {{.Name}} — {{.Title}}</option>
+          {{end}}
+        </select>
+      </form>
+    </li>
+  </ul>
 </nav>
+<p class="side"><small>Acting as <code>{{.Identity.Reference}}</code>{{if .Identity.Groups}},
+in {{range .Identity.Groups}}<code>{{.}}</code> {{end}}{{end}}.
+Switching signs you in as someone else — FlowCore has no idea any of this happened.</small></p>
 {{end}}
 
-{{define "nav"}}
-<p><a href="/">worklist</a> &middot; <a href="/workflows">workflows</a></p>
+{{define "nav"}}{{end}}
+
+{{define "mode"}}
+<p class="side"><small>Agent steps: <strong>{{.CheckerMode}}</strong>.
+{{if eq .CheckerMode "canned"}}Set <code>ANTHROPIC_API_KEY</code> and restart to have a model
+decide instead — everything else on the path is the same either way.{{end}}</small></p>
 {{end}}
 
 {{define "error"}}
-{{if .Error}}<p><strong>Rejected:</strong> {{.Error}}</p>{{end}}
+{{if .Error}}<article><strong>Rejected:</strong> {{.Error}}</article>{{end}}
 {{end}}
 
-{{define "mode"}}
-<p><small>Agent steps: <strong>{{.CheckerMode}}</strong>.
-{{if eq .CheckerMode "canned"}}Set <code>ANTHROPIC_API_KEY</code> and restart to have a
-model decide instead. Everything else on the path is the same either way.{{end}}</small></p>
+{{define "calllog"}}
+{{if .Traces}}
+<details>
+  <summary>What just happened — this application, and the library</summary>
+  <p class="side"><small>The indented lines are work this application did. The bold lines
+  are the only moments FlowCore was involved. The ratio is the argument: almost everything
+  about identity, subjects, dispatch and policy lives on this side of the boundary, which is
+  why the library can carry a software release and an insurance claim without knowing what
+  either one is.</small></p>
+  <div class="log">
+  {{range .Traces}}
+    <p class="title">{{.At.Format "15:04:05"}} &middot; {{.Title}}</p>
+    <ul>
+      {{range .Lines}}
+      <li class="{{.Source}}">{{if eq .Source "client"}}&nbsp;&nbsp;&nbsp;{{else if eq .Source "call"}}&rarr;&nbsp;{{else}}&larr;&nbsp;{{end}}{{.Text}}</li>
+      {{end}}
+    </ul>
+  {{end}}
+  </div>
+</details>
+{{end}}
 {{end}}
 
 {{define "footer"}}
 <hr>
-<p><small>Session <code>{{.SessionID}}</code> — your own definitions, runs and subjects.
-Another visitor sees none of it.</small></p>
+<p class="side"><small>Session <code>{{.SessionID}}</code> — your own definitions, runs and
+subjects. Another visitor sees none of it, and FlowCore has no tenant column.</small></p>
+</main>
 {{end}}

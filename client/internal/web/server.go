@@ -124,6 +124,9 @@ type page struct {
 	// Return is where the identity switcher sends you back to, so changing who
 	// you are acting as never moves you off the screen you were reading.
 	Return string
+	// Traces is the call log: what this application did, and what it asked the
+	// library, side by side.
+	Traces []app.Trace
 }
 
 func (s *Server) newPage(r *http.Request, session *app.Session) page {
@@ -134,6 +137,7 @@ func (s *Server) newPage(r *http.Request, session *app.Session) page {
 		Roster:      app.Roster,
 		Error:       r.URL.Query().Get("error"),
 		Return:      r.URL.Path,
+		Traces:      session.Tracer.Traces(),
 	}
 }
 
@@ -247,7 +251,7 @@ func (s *Server) completeStep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := s.app.CompleteStep(r.Context(), app.IdentityByReference(session.ActingAs),
+	state, err := s.app.CompleteStep(r.Context(), session, app.IdentityByReference(session.ActingAs),
 		app.CompleteRequest{
 			VisitID:  visitID,
 			ActionID: actionID,
@@ -281,7 +285,7 @@ func (s *Server) reassign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := s.app.Reassign(r.Context(), visitID, r.FormValue("assignee"))
+	state, err := s.app.Reassign(r.Context(), session, visitID, r.FormValue("assignee"))
 	if err != nil {
 		s.back(w, r, err)
 

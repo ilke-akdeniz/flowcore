@@ -231,7 +231,14 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 		return
 	}
 
-	next, err := d.app.CompleteStep(ctx, Identity{Reference: state.CurrentStep.AssigneeID},
+	trace := session.Tracer.Start("Worker runs " + state.CurrentStep.Name)
+	trace.Client("the web request that reached this step returned long ago")
+	trace.Client("assemble what the checker needs: the step and its actions from FlowCore, " +
+		"the subject from this application's own store")
+	trace.Client("ask %s (%s) → %q", state.CurrentStep.AssigneeID, d.checker.Mode(), verdict.Remark)
+	session.Tracer.Record(trace)
+
+	next, err := d.app.CompleteStep(ctx, session, Identity{Reference: state.CurrentStep.AssigneeID},
 		CompleteRequest{
 			VisitID:             item.VisitID,
 			ActionID:            verdict.ActionID,

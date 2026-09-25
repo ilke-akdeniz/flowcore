@@ -8,7 +8,22 @@ The library records opaque references — subject, assignee, completer — and n
 
 ## Status
 
-Early development, iteration 1: configure a workflow, start one, read where it stands, complete a step.
+Two iterations shipped.
+Configure a workflow, start one, read where it stands, complete a step with a remark, list what is assigned to someone, and reassign an open step.
+AI review steps need no mechanism of their own: an agent is a step whose assignee happens to name one, and the library never learns the difference.
+
+See it running: [the reference client](client/) is a working application built on this library — two workflows with nothing in common, four human groups, four agent steps, and a call log showing which side of the boundary did what.
+
+## Why this repo is worth a look
+
+The design is argued rather than asserted.
+[`docs/decisions.md`](docs/decisions.md) is a running log of every decision with its alternatives weighed and measured — a concurrency race forced and observed, index probes with buffer counts, and the columns deliberately not built.
+
+Three that show the shape of it:
+
+- **Decision 25** derives the current step from the one open visit rather than storing a pointer — and the index that makes it work turns out to be the completion path's concurrency mechanism as well.
+- **Decision 40** refuses parallel steps, and records what that rules out and what the migration would be if it is ever needed.
+- **Decision 44** deletes a generic type and four exported identifiers, because a `NOT NULL` removed the hazard they existed to guard.
 
 ## Requirements
 
@@ -76,7 +91,6 @@ approved := uuid.Must(uuid.NewV7())
 rejected := uuid.Must(uuid.NewV7())
 managerReview := uuid.Must(uuid.NewV7())
 directorReview := uuid.Must(uuid.NewV7())
-managers := "group:managers"
 
 definition, err := catalog.Create(ctx, flowcore.WorkflowDefinition{
 	Name:                    "Expense Approval",
@@ -91,7 +105,7 @@ definition, err := catalog.Create(ctx, flowcore.WorkflowDefinition{
 			ID:                         managerReview,
 			Name:                       "manager review",
 			WorkflowStatusDefinitionID: inProgress,
-			AssigneeID:                 &managers, // opaque; never interpreted
+			AssigneeID:                 "group:managers", // opaque; never interpreted
 			Actions: []flowcore.ActionDefinition{
 				{Name: "approve", NextStepDefinitionID: &directorReview},
 				{Name: "reject", TerminalWorkflowStatusDefinitionID: &rejected},
