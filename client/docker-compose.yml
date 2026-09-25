@@ -1,0 +1,26 @@
+# Postgres for the reference client.
+#
+# Deliberately separate from the repository root's compose file, which exists for
+# the library's test suite. The client is meant to be forkable, so it does not
+# depend on the library's development setup — and a different port means both can
+# run at once without a clash.
+services:
+  postgres:
+    image: postgres:17
+    container_name: flowcore-client-postgres
+    environment:
+      POSTGRES_USER: flowcore
+      POSTGRES_PASSWORD: flowcore
+      POSTGRES_DB: flowcore_client
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowcore -d flowcore_client"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - flowcore-client-pgdata:/var/lib/postgresql/data
+
+volumes:
+  flowcore-client-pgdata:

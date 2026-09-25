@@ -271,3 +271,29 @@ README must open by saying it is an application built on FlowCore.
 The name also raises the promise slightly, so the README has to be honest about what this is not:
 authentication is faked and there is no user management, because those demonstrate nothing about the
 library and would be the largest code in the repository.
+
+---
+
+## 8. Handler parameters stay `w, r`
+
+**Context.**
+`CLAUDE.md` requires full, complete-word identifiers and rejects truncation, with narrow exceptions:
+Go's structural particles (`err`, `ok`, `ctx`, loop indices), a method receiver, and a function's
+single dominant parameter. An HTTP handler has two parameters of comparable weight, so it fits none
+of them.
+
+**Decision.**
+`w http.ResponseWriter, r *http.Request` throughout the web layer.
+
+**Why.**
+The rule's own test is whether an identifier needs project-specific memory to decode or is
+self-evident everywhere it appears. `w` and `r` in a handler signature are fixed in meaning across
+all Go code — closer to `ctx` and `err` than to `def` for definition — and `writer, request` would
+read as strange to any Go reader without making anything clearer.
+
+Recorded because it is a visible deviation from a stated rule, and silence would leave a reader
+unsure whether it was considered or careless. The rule holds everywhere else here: one truncation,
+`envOr`, was found and renamed to `environmentOr`.
+
+**Consequence.**
+The exception is exactly this signature, not a general licence for short names in the web layer.
