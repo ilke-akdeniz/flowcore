@@ -52,6 +52,19 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /release/{version}/complete", s.completeStep)
 	mux.HandleFunc("POST /release/{version}/reassign", s.reassign)
 
+	mux.HandleFunc("GET /workflows", s.showWorkflows)
+	mux.HandleFunc("POST /workflows", s.createWorkflow)
+	mux.HandleFunc("GET /workflows/{id}", s.showWorkflow)
+	mux.HandleFunc("POST /workflows/{id}/rename", s.renameWorkflow)
+	mux.HandleFunc("POST /workflows/{id}/entry", s.setEntryStep)
+	mux.HandleFunc("POST /workflows/{id}/statuses", s.addStatus)
+	mux.HandleFunc("POST /workflows/{id}/statuses/{statusID}/delete", s.deleteStatus)
+	mux.HandleFunc("POST /workflows/{id}/steps", s.addStep)
+	mux.HandleFunc("POST /workflows/{id}/steps/{stepID}", s.updateStep)
+	mux.HandleFunc("POST /workflows/{id}/steps/{stepID}/delete", s.deleteStep)
+	mux.HandleFunc("POST /workflows/{id}/steps/{stepID}/actions", s.addAction)
+	mux.HandleFunc("POST /workflows/{id}/actions/{actionID}/delete", s.deleteAction)
+
 	return s.withSession(mux)
 }
 

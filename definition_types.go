@@ -17,8 +17,12 @@ type WorkflowDefinition struct {
 	// partially built definition; the aggregate Create always sets it. It
 	// references a step in Steps.
 	InitialStepDefinitionID *uuid.UUID
-	Statuses                []WorkflowStatusDefinition
-	Steps                   []StepDefinition
+	// Statuses and Steps come back ordered by name. Not by creation, and not in
+	// any order a run passes through them — a definition is a graph, so no such
+	// order exists to return. InitialStepDefinitionID is where a run begins, and
+	// the actions are how it moves.
+	Statuses []WorkflowStatusDefinition
+	Steps    []StepDefinition
 }
 
 // WorkflowStatusDefinition is a named status a workflow can be in (e.g. "in
@@ -45,6 +49,11 @@ type StepDefinition struct {
 	// Actions is the set of actions leaving this step. Loaded by Get and by the
 	// mutating methods on return. An empty non-nil slice means "loaded, no
 	// actions"; nil means "not loaded".
+	//
+	// Ordered by name, as Statuses and Steps are on the definition. That is a
+	// stable, predictable order for a list, and deliberately not the order a run
+	// visits them in — a definition is a graph, so there is no such order to
+	// return. A caller rendering the flow derives it from the routing.
 	Actions []ActionDefinition
 }
 

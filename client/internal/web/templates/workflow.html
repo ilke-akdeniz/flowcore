@@ -1,0 +1,103 @@
+{{template "head" .}}
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+{{template "whoami" .}}
+{{template "nav" .}}
+{{template "error" .}}
+
+<h1>{{.Definition.Name}}</h1>
+
+{{if not .Startable}}
+<p><strong>No starting step.</strong> Runs cannot begin until one is set.</p>
+{{end}}
+
+<pre class="mermaid">{{.Mermaid}}</pre>
+<script>mermaid.initialize({startOnLoad:true});</script>
+<p><small>Drawn from the definition FlowCore returned, so the picture cannot drift
+from what will actually run. Rounded nodes are terminal statuses — a status a run
+merely shows while sitting on a step is a label, not a node.</small></p>
+
+<h2>Statuses</h2>
+<ul>
+  {{range .Definition.Statuses}}
+  <li>{{.Name}}
+    <form method="post" action="/workflows/{{$.Definition.ID}}/statuses/{{.ID}}/delete"
+          style="display:inline"><button type="submit">delete</button></form>
+  </li>
+  {{end}}
+</ul>
+<form method="post" action="/workflows/{{.Definition.ID}}/statuses">
+  <input name="name" placeholder="approved" required>
+  <button type="submit">add status</button>
+</form>
+
+<h2>Steps</h2>
+{{range .Definition.Steps}}
+<fieldset>
+  <legend>{{.Name}}{{if eq (printf "%s" .ID) $.EntryStepID}} — starting step{{end}}</legend>
+
+  <form method="post" action="/workflows/{{$.Definition.ID}}/steps/{{.ID}}">
+    <input name="name" value="{{.Name}}" required>
+    <select name="status">
+      {{$current := .WorkflowStatusDefinitionID}}
+      {{range $.Definition.Statuses}}
+        <option value="{{.ID}}" {{if eq .ID $current}}selected{{end}}>{{.Name}}</option>
+      {{end}}
+    </select>
+    <input name="assignee" value="{{.AssigneeID}}" list="assignables" required>
+    <button type="submit">save</button>
+  </form>
+  <p><small>Saving writes all three fields. Update is a full replace in FlowCore, so
+  there is no "change only the name" — which is why this form posts everything it
+  shows.</small></p>
+
+  <p>Actions:</p>
+  <ul>
+    {{range .Actions}}
+    <li>{{.Name}} &rarr;
+      {{if .NextStepDefinitionID}}step{{else}}<em>ends the run</em>{{end}}
+      <form method="post" action="/workflows/{{$.Definition.ID}}/actions/{{.ID}}/delete"
+            style="display:inline"><button type="submit">delete</button></form>
+    </li>
+    {{else}}
+    <li><em>none — a run reaching this step cannot leave it</em></li>
+    {{end}}
+  </ul>
+
+  <form method="post" action="/workflows/{{$.Definition.ID}}/steps/{{.ID}}/actions">
+    <input name="name" placeholder="approve" required>
+    <select name="target">
+      {{range $.Definition.Steps}}<option value="step:{{.ID}}">&rarr; {{.Name}}</option>{{end}}
+      {{range $.Definition.Statuses}}<option value="status:{{.ID}}">end as {{.Name}}</option>{{end}}
+    </select>
+    <button type="submit">add action</button>
+  </form>
+
+  <form method="post" action="/workflows/{{$.Definition.ID}}/entry" style="display:inline">
+    <input type="hidden" name="step" value="{{.ID}}">
+    <button type="submit">make this the starting step</button>
+  </form>
+  <form method="post" action="/workflows/{{$.Definition.ID}}/steps/{{.ID}}/delete" style="display:inline">
+    <button type="submit">delete step</button>
+  </form>
+</fieldset>
+{{end}}
+
+<h2>Add a step</h2>
+<form method="post" action="/workflows/{{.Definition.ID}}/steps">
+  <input name="name" placeholder="legal review" required>
+  <select name="status">
+    {{range .Definition.Statuses}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+  </select>
+  <input name="assignee" list="assignables" placeholder="group:legal" required>
+  <button type="submit">add step</button>
+</form>
+
+<datalist id="assignables">
+  {{range .Assignable}}<option value="{{.}}">{{end}}
+</datalist>
+
+<h2>Rename</h2>
+<form method="post" action="/workflows/{{.Definition.ID}}/rename">
+  <input name="name" value="{{.Definition.Name}}" required>
+  <button type="submit">rename</button>
+</form>

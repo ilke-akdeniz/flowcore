@@ -21,6 +21,10 @@
 </nav>
 {{end}}
 
+{{define "nav"}}
+<p><a href="/">worklist</a> &middot; <a href="/workflows">workflows</a></p>
+{{end}}
+
 {{define "error"}}
 {{if .Error}}<p><strong>Rejected:</strong> {{.Error}}</p>{{end}}
 {{end}}
