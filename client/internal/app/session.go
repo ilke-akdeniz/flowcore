@@ -33,6 +33,11 @@ type Session struct {
 	// accidentally show one session another's work.
 	DefinitionIDs []uuid.UUID
 
+	// ActingAs is the roster member this visitor is currently acting as. It is
+	// the client's notion of "signed in", and FlowCore never learns it — only the
+	// opaque reference that reaches completedBy.
+	ActingAs string
+
 	// Releases is the subject store. FlowCore holds only an opaque reference like
 	// "s7f3a2:release:v2.4.0" and never the release itself, so somebody has to,
 	// and that somebody is the client.
@@ -93,6 +98,7 @@ func (s *SessionStore) Create() *Session {
 		ID:        newSessionID(),
 		CreatedAt: now,
 		LastSeen:  now,
+		ActingAs:  Roster[0].Reference,
 		Releases:  make(map[string]Release),
 	}
 

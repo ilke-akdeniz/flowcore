@@ -142,7 +142,7 @@ func releaseApprovalDefinition() flowcore.WorkflowDefinition {
 				ID:                         authorRevision,
 				WorkflowStatusDefinitionID: inReview,
 				Name:                       "author revision",
-				AssigneeID:                 "user:submitter",
+				AssigneeID:                 "user:alex",
 				Actions: []flowcore.ActionDefinition{
 					{Name: "resubmit", NextStepDefinitionID: &riskAnalysis},
 				},

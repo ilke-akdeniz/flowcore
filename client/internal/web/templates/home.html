@@ -1,0 +1,30 @@
+{{template "head" .}}
+{{template "whoami" .}}
+{{template "error" .}}
+
+<h1>Waiting on {{.Identity.Name}}</h1>
+
+{{if .Worklist}}
+<table border="1" cellpadding="4">
+  <tr><th>Step</th><th>Subject</th><th>Assigned to</th><th>Waiting since</th></tr>
+  {{range .Worklist}}
+  <tr>
+    <td><a href="/release/{{.SubjectReference | releaseVersion}}">{{.StepName}}</a></td>
+    <td><code>{{.SubjectReference}}</code></td>
+    <td><code>{{.AssigneeID}}</code></td>
+    <td>{{.EnteredAt.Format "15:04:05"}}</td>
+  </tr>
+  {{end}}
+</table>
+<p><small>One query: <code>ListAssignedSteps</code> with
+<code>{{range .Identity.WorklistReferences}}{{.}} {{end}}</code> — this person plus
+their groups, expanded by this application because FlowCore does not know what a
+group is. The result is then filtered to this session's own definitions.</small></p>
+{{else}}
+<p>Nothing. Switch to someone else, or move work to {{.Identity.Name}} from a release page.</p>
+{{end}}
+
+<h2>Releases</h2>
+<ul>
+  {{range .Releases}}<li><a href="/release/{{.Version}}">{{.Version}} — {{.Title}}</a></li>{{end}}
+</ul>

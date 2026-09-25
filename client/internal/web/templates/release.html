@@ -1,0 +1,62 @@
+{{template "head" .}}
+{{template "whoami" .}}
+{{template "error" .}}
+
+<p><a href="/">&larr; worklist</a></p>
+
+<h1>Release {{.Release.Version}}</h1>
+<p>{{.Release.Title}}</p>
+
+<h2>The subject — stored by this application, not by FlowCore</h2>
+<dl>
+  <dt>Commit</dt><dd>{{.Release.Commit}}</dd>
+  <dt>Changelog</dt><dd>{{.Release.Changelog}}</dd>
+  <dt>Diff</dt><dd>{{.Release.DiffStat}}</dd>
+</dl>
+<p><small>FlowCore holds the reference <code>{{.Subject}}</code> and the version token
+<code>{{.Release.Commit}}</code>. Everything above lives here.</small></p>
+
+<h2>Where the run stands — read from FlowCore</h2>
+<p>Status: <strong>{{.State.WorkflowStatusName}}</strong></p>
+
+{{with .State.CurrentStep}}
+  <p>Waiting on <strong>{{.Name}}</strong>, assigned to <code>{{.AssigneeID}}</code>,
+     since {{.EnteredAt.Format "15:04:05"}}.</p>
+
+  {{if not $.CanAct}}
+  <p><small>This is not in {{$.Identity.Name}}'s queue. The buttons still work:
+  FlowCore records who acted and never decides whether they were allowed to, which
+  is exactly how a person overrides an agent.</small></p>
+  {{end}}
+
+  <form method="post" action="/release/{{$.Release.Version}}/complete">
+    <input type="hidden" name="visit" value="{{.VisitID}}">
+    <p>
+      <label>Remark (optional, 3000 characters)<br>
+      <textarea name="remark" rows="3" cols="60"
+                placeholder="Why — stamped in the same transaction as the decision."></textarea></label>
+    </p>
+    {{range .Actions}}
+      <button type="submit" name="action" value="{{.ID}}">{{.Name}}</button>
+    {{else}}
+      <span>No actions — this step is a dead end in the definition it started from.</span>
+    {{end}}
+  </form>
+
+  <h3>Reassign</h3>
+  <form method="post" action="/release/{{$.Release.Version}}/reassign">
+    <input type="hidden" name="visit" value="{{.VisitID}}">
+    <select name="assignee">
+      {{range $.Assignable}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <button type="submit">move this step</button>
+    <br><small>Only an open visit can be moved. A closed one is never rewritten, so
+    past decisions keep the assignee they were made under.</small>
+  </form>
+{{else}}
+  <p>The run is finished. Nothing is open.</p>
+{{end}}
+
+<h2>History</h2>
+<p><small>Phase 3 adds the agent worker; until then the run sits on its first step
+with nobody attending it, which is the whole point of a durable workflow.</small></p>

@@ -1,0 +1,32 @@
+{{define "head"}}
+<!doctype html>
+<meta charset="utf-8">
+<title>FlowCore reference client</title>
+{{end}}
+
+{{define "whoami"}}
+<nav>
+  <strong>Acting as {{.Identity.Name}}</strong> — {{.Identity.Title}},
+  <code>{{.Identity.Reference}}</code>
+  {{if .Identity.Groups}}in {{range .Identity.Groups}}<code>{{.}}</code> {{end}}{{end}}
+  <form method="post" action="/identity" style="display:inline">
+    <input type="hidden" name="return" value="{{.Return}}">
+    <select name="reference">
+      {{range .Roster}}<option value="{{.Reference}}">{{.Name}} — {{.Title}}</option>{{end}}
+    </select>
+    <button type="submit">switch</button>
+  </form>
+  <br><small>Switching signs you in as someone else. FlowCore has no idea any of
+  this happened — it only ever sees the reference strings this application sends.</small>
+</nav>
+{{end}}
+
+{{define "error"}}
+{{if .Error}}<p><strong>Rejected:</strong> {{.Error}}</p>{{end}}
+{{end}}
+
+{{define "footer"}}
+<hr>
+<p><small>Session <code>{{.SessionID}}</code> — your own definitions, runs and subjects.
+Another visitor sees none of it.</small></p>
+{{end}}
