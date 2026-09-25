@@ -25,6 +25,12 @@
 {{if .Error}}<p><strong>Rejected:</strong> {{.Error}}</p>{{end}}
 {{end}}
 
+{{define "mode"}}
+<p><small>Agent steps: <strong>{{.CheckerMode}}</strong>.
+{{if eq .CheckerMode "canned"}}Set <code>ANTHROPIC_API_KEY</code> and restart to have a
+model decide instead. Everything else on the path is the same either way.{{end}}</small></p>
+{{end}}
+
 {{define "footer"}}
 <hr>
 <p><small>Session <code>{{.SessionID}}</code> — your own definitions, runs and subjects.

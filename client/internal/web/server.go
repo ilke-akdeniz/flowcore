@@ -101,21 +101,25 @@ func sessionFrom(r *http.Request) *app.Session {
 // error from whatever POST bounced you here.
 type page struct {
 	SessionID string
-	Identity  app.Identity
-	Roster    []app.Identity
-	Error     string
+	// CheckerMode is "canned" or the model being called, so a visitor can see
+	// whether they are watching a real judgment or a script.
+	CheckerMode string
+	Identity    app.Identity
+	Roster      []app.Identity
+	Error       string
 	// Return is where the identity switcher sends you back to, so changing who
 	// you are acting as never moves you off the screen you were reading.
 	Return string
 }
 
-func newPage(r *http.Request, session *app.Session) page {
+func (s *Server) newPage(r *http.Request, session *app.Session) page {
 	return page{
-		SessionID: session.ID,
-		Identity:  app.IdentityByReference(session.ActingAs),
-		Roster:    app.Roster,
-		Error:     r.URL.Query().Get("error"),
-		Return:    r.URL.Path,
+		SessionID:   session.ID,
+		CheckerMode: s.app.Dispatcher.Mode(),
+		Identity:    app.IdentityByReference(session.ActingAs),
+		Roster:      app.Roster,
+		Error:       r.URL.Query().Get("error"),
+		Return:      r.URL.Path,
 	}
 }
 
@@ -143,7 +147,7 @@ func (s *Server) showHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, "home.html", homePage{
-		page:     newPage(r, session),
+		page:     s.newPage(r, session),
 		Worklist: worklist,
 		Releases: releases,
 	})
@@ -167,6 +171,9 @@ type releasePage struct {
 	// not gate them either — anyone may complete any step, and the record says who
 	// did. That is how a human overrides an agent.
 	CanAct bool
+	// AgentPending is true when the open step belongs to an agent, so the page can
+	// say why nothing appears to be happening.
+	AgentPending bool
 }
 
 func (s *Server) showRelease(w http.ResponseWriter, r *http.Request) {
@@ -189,18 +196,20 @@ func (s *Server) showRelease(w http.ResponseWriter, r *http.Request) {
 
 	current := app.IdentityByReference(session.ActingAs)
 
-	canAct := false
+	canAct, agentPending := false, false
 	if state.CurrentStep != nil {
 		canAct = current.CanActAs(state.CurrentStep.AssigneeID)
+		agentPending = app.IsAgent(state.CurrentStep.AssigneeID)
 	}
 
 	s.render(w, "release.html", releasePage{
-		page:       newPage(r, session),
-		Release:    release,
-		Subject:    session.SubjectReference(release.Version),
-		State:      state,
-		Assignable: app.AssignableReferences(),
-		CanAct:     canAct,
+		page:         s.newPage(r, session),
+		Release:      release,
+		Subject:      session.SubjectReference(release.Version),
+		State:        state,
+		Assignable:   app.AssignableReferences(),
+		CanAct:       canAct,
+		AgentPending: agentPending,
 	})
 }
 
@@ -216,7 +225,7 @@ func (s *Server) completeStep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = s.app.CompleteStep(r.Context(), app.IdentityByReference(session.ActingAs),
+	state, err := s.app.CompleteStep(r.Context(), app.IdentityByReference(session.ActingAs),
 		app.CompleteRequest{
 			VisitID:  visitID,
 			ActionID: actionID,
@@ -231,10 +240,16 @@ func (s *Server) completeStep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Case-4 dispatch: this response already says whether an agent owns the next
+	// step, so nothing has to poll to discover it. The request returns now and a
+	// worker picks the step up afterwards.
+	s.app.Dispatcher.Dispatch(session, session.DefinitionIDs[0], state)
+
 	http.Redirect(w, r, "/release/"+version, http.StatusSeeOther)
 }
 
 func (s *Server) reassign(w http.ResponseWriter, r *http.Request) {
+	session := sessionFrom(r)
 	version := r.PathValue("version")
 
 	visitID, err := uuid.Parse(r.FormValue("visit"))
@@ -244,11 +259,17 @@ func (s *Server) reassign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.app.Reassign(r.Context(), visitID, r.FormValue("assignee")); err != nil {
+	state, err := s.app.Reassign(r.Context(), visitID, r.FormValue("assignee"))
+	if err != nil {
 		s.back(w, r, version, err)
 
 		return
 	}
+
+	// Moving a step to an agent hands it to the worker, exactly as routing into
+	// one would. Nothing distinguishes the two cases, because nothing about an
+	// agent is special — it is an assignee like any other.
+	s.app.Dispatcher.Dispatch(session, session.DefinitionIDs[0], state)
 
 	http.Redirect(w, r, "/release/"+version, http.StatusSeeOther)
 }

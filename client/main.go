@@ -63,8 +63,9 @@ func run(logger *slog.Logger) error {
 
 	logger.Info("schema applied")
 
-	application := app.New(config, pool)
+	application := app.New(config, pool, logger)
 	application.StartJanitor(ctx, logger)
+	application.Dispatcher.Start(ctx)
 
 	server, err := web.NewServer(application, logger)
 	if err != nil {

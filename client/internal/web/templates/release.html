@@ -1,5 +1,6 @@
 {{template "head" .}}
 {{template "whoami" .}}
+{{template "mode" .}}
 {{template "error" .}}
 
 <p><a href="/">&larr; worklist</a></p>
@@ -57,6 +58,8 @@
   <p>The run is finished. Nothing is open.</p>
 {{end}}
 
-<h2>History</h2>
-<p><small>Phase 3 adds the agent worker; until then the run sits on its first step
-with nobody attending it, which is the whole point of a durable workflow.</small></p>
+{{if .AgentPending}}
+<p><small><strong>This step belongs to an agent.</strong> The request that got you here
+has already returned — the run is sitting in the database, open, with nothing holding
+it. A worker will pick it up. Reload in a moment.</small></p>
+{{end}}

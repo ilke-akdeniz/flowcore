@@ -31,24 +31,45 @@ func (a *App) EnsureSeeded(ctx context.Context, session *Session) error {
 
 	session.DefinitionIDs = append(session.DefinitionIDs, definition.ID)
 
-	release := Release{
-		Version:   "v2.4.0",
-		Commit:    "a3f91c2",
-		Title:     "Add rate limiting to the public API",
-		Changelog: "Adds per-key rate limiting. No breaking changes.",
-		DiffStat:  "14 files changed, 512 insertions(+), 38 deletions(-)",
+	// Two releases, because the workflow branches on the first agent's verdict and
+	// one run can only take one branch. The low-risk one runs both agent steps and
+	// lands on QA; the high-risk one escalates to security review, where a person
+	// has to decide.
+	releases := []Release{
+		{
+			Version:   "v2.4.0",
+			Commit:    "a3f91c2",
+			Title:     "Add rate limiting to the public API",
+			Changelog: "Adds per-key rate limiting. No breaking changes.",
+			DiffStat:  "14 files changed, 512 insertions(+), 38 deletions(-)",
+		},
+		{
+			Version:   "v2.5.0-rc1",
+			Commit:    "7d10b84",
+			Title:     "Migrate session storage to Redis",
+			Changelog: "Internal refactor only.",
+			DiffStat:  "9 files changed, 214 insertions(+), 186 deletions(-)",
+		},
 	}
-	session.Releases[release.Version] = release
 
-	// The subject lives in the line above. FlowCore gets the reference and the
-	// version token, and nothing else — it never learns what a release is.
-	_, err = a.Engine.Start(ctx, flowcore.StartParams{
-		WorkflowDefinitionID: definition.ID,
-		SubjectReference:     session.SubjectReference(release.Version),
-		SubjectVersionToken:  &release.Commit,
-	})
-	if err != nil {
-		return fmt.Errorf("start seeded run: %w", err)
+	for _, release := range releases {
+		session.Releases[release.Version] = release
+
+		// The subject lives in the line above. FlowCore gets the reference and the
+		// version token, and nothing else — it never learns what a release is.
+		state, err := a.Engine.Start(ctx, flowcore.StartParams{
+			WorkflowDefinitionID: definition.ID,
+			SubjectReference:     session.SubjectReference(release.Version),
+			SubjectVersionToken:  &release.Commit,
+		})
+		if err != nil {
+			return fmt.Errorf("start seeded run for %s: %w", release.Version, err)
+		}
+
+		// The run now sits on an agent step with nobody attending it. Handing the
+		// state to the dispatcher is case-4 dispatch in one line: whoever advanced
+		// the run already knows whether an agent owns what comes next.
+		a.Dispatcher.Dispatch(session, definition.ID, state)
 	}
 
 	return nil

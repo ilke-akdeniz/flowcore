@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,15 +21,58 @@ type App struct {
 	Catalog  *flowcore.Catalog
 	Engine   *flowcore.Engine
 	Sessions *SessionStore
+	// Dispatcher runs agent steps off the web request. Set by New.
+	Dispatcher *Dispatcher
 }
 
-func New(config Config, pool *pgxpool.Pool) *App {
-	return &App{
+func New(config Config, pool *pgxpool.Pool, logger *slog.Logger) *App {
+	application := &App{
 		Config:   config,
 		Catalog:  flowcore.NewCatalog(pool),
 		Engine:   flowcore.NewEngine(pool),
 		Sessions: NewSessionStore(),
 	}
+	application.Dispatcher = NewDispatcher(application, chooseChecker(logger), logger)
+
+	return application
+}
+
+// chooseChecker decides whether agent steps consult a model or a script.
+//
+// Detect and switch, per decision 5: with a key the findings are real, without
+// one they are pre-written against the seeded releases. Everything else on the
+// path — the queue, the worker, the CompleteStep call, the remark on the visit —
+// is identical, so someone who clones this with nothing configured still sees the
+// whole application work.
+func chooseChecker(logger *slog.Logger) Checker {
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		logger.Info("agent steps use canned findings",
+			"reason", "ANTHROPIC_API_KEY is not set")
+
+		return CannedChecker{}
+	}
+
+	checker := NewClaudeChecker()
+	logger.Info("agent steps call a model", "mode", checker.Mode())
+
+	return checker
+}
+
+// AgentReferences are the assignees this application dispatches automatically.
+//
+// Derived from the seeded definition rather than listed separately, so the two
+// cannot drift. Once a visitor can define their own steps, this has to collect
+// agent assignees from their definitions too.
+func (a *App) AgentReferences() []string {
+	var references []string
+
+	for _, step := range releaseApprovalDefinition().Steps {
+		if IsAgent(step.AssigneeID) {
+			references = append(references, step.AssigneeID)
+		}
+	}
+
+	return references
 }
 
 // StartJanitor expires idle sessions and deletes the definitions they created.

@@ -114,5 +114,15 @@ func AssignableReferences() []string {
 		}
 	}
 
+	// Agents belong in this list for the same reason they belong in a worklist:
+	// nothing distinguishes them from a person here. Moving a step to an agent is
+	// how a human hands work back to one.
+	for _, step := range releaseApprovalDefinition().Steps {
+		if IsAgent(step.AssigneeID) && !seen[step.AssigneeID] {
+			seen[step.AssigneeID] = true
+			references = append(references, step.AssigneeID)
+		}
+	}
+
 	return references
 }
