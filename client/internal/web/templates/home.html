@@ -10,7 +10,7 @@
   <tr><th>Step</th><th>Subject</th><th>Assigned to</th><th>Waiting since</th></tr>
   {{range .Worklist}}
   <tr>
-    <td><a href="/release/{{.SubjectReference | releaseVersion}}">{{.StepName}}</a></td>
+    <td><a href="{{.SubjectReference | subjectPath}}">{{.StepName}}</a></td>
     <td><code>{{.SubjectReference}}</code></td>
     <td><code>{{.AssigneeID}}</code></td>
     <td>{{.EnteredAt.Format "15:04:05"}}</td>
@@ -25,7 +25,13 @@ group is. The result is then filtered to this session's own definitions.</small>
 <p>Nothing. Switch to someone else, or move work to {{.Identity.Name}} from a release page.</p>
 {{end}}
 
-<h2>Releases</h2>
+<h2>Everything in flight</h2>
 <ul>
-  {{range .Releases}}<li><a href="/release/{{.Version}}">{{.Version}} — {{.Title}}</a></li>{{end}}
+  {{range .Runs}}
+  <li><a href="/subject/{{.Subject.Kind}}/{{.Subject | subjectID}}">{{.Subject.Title}}</a>
+      <small>({{.Subject.Kind}})</small></li>
+  {{end}}
 </ul>
+<p><small>Two workflows with nothing in common — a software release and an insurance
+claim — running side by side on the same engine. FlowCore stores a reference string
+for each and has no idea what either one is.</small></p>

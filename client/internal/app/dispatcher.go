@@ -210,7 +210,7 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 		return
 	}
 
-	release, ok := session.Releases[releaseVersionOf(item.SubjectReference)]
+	run, ok := session.RunFor(subjectOf(item.SubjectReference))
 	if !ok {
 		d.logger.Warn("agent step: no subject", "subject", item.SubjectReference)
 
@@ -220,7 +220,7 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 	verdict, err := d.checker.Check(ctx, CheckRequest{
 		Agent:    state.CurrentStep.AssigneeID,
 		StepName: state.CurrentStep.Name,
-		Release:  release,
+		Subject:  run.Subject,
 		Actions:  state.CurrentStep.Actions,
 	})
 	if err != nil {
@@ -236,7 +236,7 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 			VisitID:             item.VisitID,
 			ActionID:            verdict.ActionID,
 			Remark:              verdict.Remark,
-			SubjectVersionToken: release.Commit,
+			SubjectVersionToken: run.Subject.VersionToken(),
 		})
 	if err != nil {
 		d.logger.Warn("agent step: completing", "visit", item.VisitID, "err", err)
@@ -252,8 +252,17 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 	d.Dispatch(session, item.DefinitionID, next)
 }
 
-func releaseVersionOf(subjectReference string) string {
-	parts := strings.Split(subjectReference, ":")
+// subjectOf strips the session prefix, leaving the subject's own reference:
+// "s7f3a2:claim:C-1042" becomes "claim:C-1042".
+//
+// Knowing that the first segment is a session and the rest identifies a subject
+// is knowledge that lives only here. FlowCore stores the whole string and never
+// looks inside it.
+func subjectOf(subjectReference string) string {
+	_, subject, found := strings.Cut(subjectReference, ":")
+	if !found {
+		return subjectReference
+	}
 
-	return parts[len(parts)-1]
+	return subject
 }

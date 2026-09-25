@@ -1,21 +1,37 @@
 {{template "head" .}}
 {{template "whoami" .}}
+{{template "nav" .}}
 {{template "mode" .}}
 {{template "error" .}}
 
-<p><a href="/">&larr; worklist</a></p>
-
-<h1>Release {{.Release.Version}}</h1>
-<p>{{.Release.Title}}</p>
+<h1>{{.Run.Subject.Title}}</h1>
 
 <h2>The subject — stored by this application, not by FlowCore</h2>
-<dl>
-  <dt>Commit</dt><dd>{{.Release.Commit}}</dd>
-  <dt>Changelog</dt><dd>{{.Release.Changelog}}</dd>
-  <dt>Diff</dt><dd>{{.Release.DiffStat}}</dd>
-</dl>
-<p><small>FlowCore holds the reference <code>{{.Subject}}</code> and the version token
-<code>{{.Release.Commit}}</code>. Everything above lives here.</small></p>
+
+{{if eq .Run.Subject.Kind "release"}}
+  {{with .Run.Subject}}
+  <dl>
+    <dt>Commit</dt><dd>{{.Commit}}</dd>
+    <dt>Changelog</dt><dd>{{.Changelog}}</dd>
+    <dt>Diff</dt><dd>{{.DiffStat}}</dd>
+  </dl>
+  {{end}}
+{{else}}
+  {{with .Run.Subject}}
+  <dl>
+    <dt>Policy</dt><dd>{{.Policy}}</dd>
+    <dt>Amount</dt><dd>{{.Amount}}</dd>
+    <dt>Documents on file</dt>
+    <dd>{{range $i, $d := .Documents}}{{if $i}}, {{end}}{{$d}}{{else}}<em>none</em>{{end}}</dd>
+    <dt>Claimant's account</dt><dd>{{.Incident}}</dd>
+    <dt>Police report</dt><dd>{{.PoliceReport}}</dd>
+  </dl>
+  {{end}}
+{{end}}
+
+<p><small>FlowCore holds the reference <code>{{.Reference}}</code> and the version token
+<code>{{.Run.Subject.VersionToken}}</code>. Everything above lives here — a release and
+a claim have nothing in common, and the library carries both without knowing either.</small></p>
 
 <h2>Where the run stands — read from FlowCore</h2>
 <p>Status: <strong>{{.State.WorkflowStatusName}}</strong></p>
@@ -30,7 +46,7 @@
   is exactly how a person overrides an agent.</small></p>
   {{end}}
 
-  <form method="post" action="/release/{{$.Release.Version}}/complete">
+  <form method="post" action="/subject/{{$.Run.Subject.Kind}}/{{$.IDPart}}/complete">
     <input type="hidden" name="visit" value="{{.VisitID}}">
     <p>
       <label>Remark (optional, 3000 characters)<br>
@@ -45,7 +61,7 @@
   </form>
 
   <h3>Reassign</h3>
-  <form method="post" action="/release/{{$.Release.Version}}/reassign">
+  <form method="post" action="/subject/{{$.Run.Subject.Kind}}/{{$.IDPart}}/reassign">
     <input type="hidden" name="visit" value="{{.VisitID}}">
     <select name="assignee">
       {{range $.Assignable}}<option value="{{.}}">{{.}}</option>{{end}}

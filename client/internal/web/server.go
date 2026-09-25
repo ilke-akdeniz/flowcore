@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -48,9 +49,9 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.showHome)
 	mux.HandleFunc("POST /identity", s.switchIdentity)
-	mux.HandleFunc("GET /release/{version}", s.showRelease)
-	mux.HandleFunc("POST /release/{version}/complete", s.completeStep)
-	mux.HandleFunc("POST /release/{version}/reassign", s.reassign)
+	mux.HandleFunc("GET /subject/{kind}/{id}", s.showSubject)
+	mux.HandleFunc("POST /subject/{kind}/{id}/complete", s.completeStep)
+	mux.HandleFunc("POST /subject/{kind}/{id}/reassign", s.reassign)
 
 	mux.HandleFunc("GET /workflows", s.showWorkflows)
 	mux.HandleFunc("POST /workflows", s.createWorkflow)
@@ -139,7 +140,7 @@ func (s *Server) newPage(r *http.Request, session *app.Session) page {
 type homePage struct {
 	page
 	Worklist []flowcore.AssignedStep
-	Releases []app.Release
+	Runs     []app.Run
 }
 
 func (s *Server) showHome(w http.ResponseWriter, r *http.Request) {
@@ -154,15 +155,19 @@ func (s *Server) showHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	releases := make([]app.Release, 0, len(session.Releases))
-	for _, release := range session.Releases {
-		releases = append(releases, release)
+	runs := make([]app.Run, 0, len(session.Runs))
+	for _, run := range session.Runs {
+		runs = append(runs, run)
 	}
+
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].Subject.Reference() < runs[j].Subject.Reference()
+	})
 
 	s.render(w, "home.html", homePage{
 		page:     s.newPage(r, session),
 		Worklist: worklist,
-		Releases: releases,
+		Runs:     runs,
 	})
 }
 
@@ -173,10 +178,13 @@ func (s *Server) switchIdentity(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, r.FormValue("return"), http.StatusSeeOther)
 }
 
-type releasePage struct {
+type subjectPage struct {
 	page
-	Release    app.Release
-	Subject    string
+	Run       app.Run
+	Reference string
+	// IDPart is the subject's reference without its kind, for building form
+	// actions back to this page.
+	IDPart     string
 	State      flowcore.WorkflowState
 	Assignable []string
 	// CanAct reports whether the current identity would find this step in its own
@@ -189,9 +197,10 @@ type releasePage struct {
 	AgentPending bool
 }
 
-func (s *Server) showRelease(w http.ResponseWriter, r *http.Request) {
+func (s *Server) showSubject(w http.ResponseWriter, r *http.Request) {
 	session := sessionFrom(r)
-	release, ok := session.Releases[r.PathValue("version")]
+
+	run, ok := session.RunFor(subjectReference(r))
 	if !ok {
 		http.NotFound(w, r)
 
@@ -199,7 +208,7 @@ func (s *Server) showRelease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state, err := s.app.Engine.GetState(r.Context(),
-		session.SubjectReference(release.Version), session.DefinitionIDs[0])
+		session.SubjectReference(run.Subject), run.DefinitionID)
 	if err != nil {
 		s.logger.Error("reading state", "session", session.ID, "err", err)
 		http.Error(w, "could not read the workflow state", http.StatusInternalServerError)
@@ -215,10 +224,11 @@ func (s *Server) showRelease(w http.ResponseWriter, r *http.Request) {
 		agentPending = app.IsAgent(state.CurrentStep.AssigneeID)
 	}
 
-	s.render(w, "release.html", releasePage{
+	s.render(w, "subject.html", subjectPage{
 		page:         s.newPage(r, session),
-		Release:      release,
-		Subject:      session.SubjectReference(release.Version),
+		Run:          run,
+		Reference:    session.SubjectReference(run.Subject),
+		IDPart:       r.PathValue("id"),
 		State:        state,
 		Assignable:   app.AssignableReferences(),
 		CanAct:       canAct,
@@ -228,12 +238,11 @@ func (s *Server) showRelease(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) completeStep(w http.ResponseWriter, r *http.Request) {
 	session := sessionFrom(r)
-	version := r.PathValue("version")
-	release := session.Releases[version]
+	run, _ := session.RunFor(subjectReference(r))
 
 	visitID, actionID, err := formIDs(r, "visit", "action")
 	if err != nil {
-		s.back(w, r, version, err)
+		s.back(w, r, err)
 
 		return
 	}
@@ -245,10 +254,10 @@ func (s *Server) completeStep(w http.ResponseWriter, r *http.Request) {
 			Remark:   r.FormValue("remark"),
 			// The token comes from the client's own store, because only the client
 			// knows what revision it is showing.
-			SubjectVersionToken: release.Commit,
+			SubjectVersionToken: run.Subject.VersionToken(),
 		})
 	if err != nil {
-		s.back(w, r, version, err)
+		s.back(w, r, err)
 
 		return
 	}
@@ -256,25 +265,25 @@ func (s *Server) completeStep(w http.ResponseWriter, r *http.Request) {
 	// Case-4 dispatch: this response already says whether an agent owns the next
 	// step, so nothing has to poll to discover it. The request returns now and a
 	// worker picks the step up afterwards.
-	s.app.Dispatcher.Dispatch(session, session.DefinitionIDs[0], state)
+	s.app.Dispatcher.Dispatch(session, run.DefinitionID, state)
 
-	http.Redirect(w, r, "/release/"+version, http.StatusSeeOther)
+	http.Redirect(w, r, subjectPath(r), http.StatusSeeOther)
 }
 
 func (s *Server) reassign(w http.ResponseWriter, r *http.Request) {
 	session := sessionFrom(r)
-	version := r.PathValue("version")
+	run, _ := session.RunFor(subjectReference(r))
 
 	visitID, err := uuid.Parse(r.FormValue("visit"))
 	if err != nil {
-		s.back(w, r, version, err)
+		s.back(w, r, err)
 
 		return
 	}
 
 	state, err := s.app.Reassign(r.Context(), visitID, r.FormValue("assignee"))
 	if err != nil {
-		s.back(w, r, version, err)
+		s.back(w, r, err)
 
 		return
 	}
@@ -282,9 +291,9 @@ func (s *Server) reassign(w http.ResponseWriter, r *http.Request) {
 	// Moving a step to an agent hands it to the worker, exactly as routing into
 	// one would. Nothing distinguishes the two cases, because nothing about an
 	// agent is special — it is an assignee like any other.
-	s.app.Dispatcher.Dispatch(session, session.DefinitionIDs[0], state)
+	s.app.Dispatcher.Dispatch(session, run.DefinitionID, state)
 
-	http.Redirect(w, r, "/release/"+version, http.StatusSeeOther)
+	http.Redirect(w, r, subjectPath(r), http.StatusSeeOther)
 }
 
 // back returns to the release page carrying the error.
@@ -292,10 +301,22 @@ func (s *Server) reassign(w http.ResponseWriter, r *http.Request) {
 // The message is currently whatever the library said. Phase 4 translates the
 // typed errors into sentences a person can act on, which is one of the things
 // only a real client reveals about the API.
-func (s *Server) back(w http.ResponseWriter, r *http.Request, version string, cause error) {
+// back returns to the subject page carrying the error, translated into a sentence
+// by the same function the workflow editor uses.
+func (s *Server) back(w http.ResponseWriter, r *http.Request, cause error) {
 	s.logger.Warn("rejected", "path", r.URL.Path, "err", cause)
 	http.Redirect(w, r,
-		"/release/"+version+"?error="+url.QueryEscape(cause.Error()), http.StatusSeeOther)
+		subjectPath(r)+"?error="+url.QueryEscape(app.ErrorMessage(cause)), http.StatusSeeOther)
+}
+
+// subjectReference rebuilds the subject's own reference from the path, and
+// subjectPath does the reverse. "release:v2.4.0" is one path segment per half.
+func subjectReference(r *http.Request) string {
+	return r.PathValue("kind") + ":" + r.PathValue("id")
+}
+
+func subjectPath(r *http.Request) string {
+	return "/subject/" + r.PathValue("kind") + "/" + r.PathValue("id")
 }
 
 func formIDs(r *http.Request, first, second string) (uuid.UUID, uuid.UUID, error) {
@@ -321,10 +342,23 @@ func formIDs(r *http.Request, first, second string) (uuid.UUID, uuid.UUID, error
 // the work the library refuses to do.
 func templateFuncs() template.FuncMap {
 	return template.FuncMap{
-		"releaseVersion": func(subjectReference string) string {
-			parts := strings.Split(subjectReference, ":")
+		// subjectPath turns the reference FlowCore stored —
+		// "s7f3a2:claim:C-1042" — into a link. Only this application knows that
+		// the first segment is a session and the rest names a subject; the
+		// library stores the whole string and never looks inside it.
+		"subjectPath": func(storedReference string) string {
+			parts := strings.SplitN(storedReference, ":", 3)
+			if len(parts) < 3 {
+				return "/"
+			}
 
-			return parts[len(parts)-1]
+			return "/subject/" + parts[1] + "/" + parts[2]
+		},
+		// subjectID is the half of a subject's own reference that is not its kind.
+		"subjectID": func(subject app.Subject) string {
+			_, id, _ := strings.Cut(subject.Reference(), ":")
+
+			return id
 		},
 	}
 }

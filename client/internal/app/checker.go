@@ -19,7 +19,7 @@ import (
 type CheckRequest struct {
 	Agent    string
 	StepName string
-	Release  Release
+	Subject  Subject
 	Actions  []flowcore.Action
 }
 

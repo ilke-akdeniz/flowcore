@@ -38,30 +38,24 @@ type Session struct {
 	// opaque reference that reaches completedBy.
 	ActingAs string
 
-	// Releases is the subject store. FlowCore holds only an opaque reference like
-	// "s7f3a2:release:v2.4.0" and never the release itself, so somebody has to,
-	// and that somebody is the client.
-	Releases map[string]Release
+	// Runs is the subject store, keyed by the subject's own reference. FlowCore
+	// holds only an opaque string like "s7f3a2:claim:C-1042" and never the claim
+	// itself, so somebody has to, and that somebody is the client.
+	Runs map[string]Run
 }
 
-// Release is a subject: the thing a workflow is about.
-//
-// It never reaches FlowCore. The library stores the reference string and the
-// version token, and everything below stays here — which is what "not a document
-// store" means in practice.
-type Release struct {
-	Version   string
-	Commit    string
-	Title     string
-	Changelog string
-	DiffStat  string
+// SubjectReference is what FlowCore records for a subject: opaque to the library,
+// and prefixed with the session so two visitors working the same seeded subject
+// have two separate runs.
+func (s *Session) SubjectReference(subject Subject) string {
+	return s.ID + ":" + subject.Reference()
 }
 
-// SubjectReference is what FlowCore records for this release: opaque to the
-// library, and prefixed with the session so two visitors working the same seeded
-// release have two separate runs.
-func (s *Session) SubjectReference(version string) string {
-	return s.ID + ":release:" + version
+// RunFor finds a run by the subject's own reference, without the session prefix.
+func (s *Session) RunFor(reference string) (Run, bool) {
+	run, ok := s.Runs[reference]
+
+	return run, ok
 }
 
 // SessionStore holds live sessions in memory.
@@ -99,7 +93,7 @@ func (s *SessionStore) Create() *Session {
 		CreatedAt: now,
 		LastSeen:  now,
 		ActingAs:  Roster[0].Reference,
-		Releases:  make(map[string]Release),
+		Runs:      make(map[string]Run),
 	}
 
 	s.mutex.Lock()

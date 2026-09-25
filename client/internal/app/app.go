@@ -66,9 +66,11 @@ func chooseChecker(logger *slog.Logger) Checker {
 func (a *App) AgentReferences() []string {
 	var references []string
 
-	for _, step := range releaseApprovalDefinition().Steps {
-		if IsAgent(step.AssigneeID) {
-			references = append(references, step.AssigneeID)
+	for _, definition := range seededDefinitions() {
+		for _, step := range definition.Steps {
+			if IsAgent(step.AssigneeID) {
+				references = append(references, step.AssigneeID)
+			}
 		}
 	}
 

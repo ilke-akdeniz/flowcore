@@ -69,7 +69,7 @@ func (c *ClaudeChecker) Check(ctx context.Context, request CheckRequest) (Verdic
 		MaxTokens: 1024,
 		System:    []anthropic.TextBlockParam{{Text: system}},
 		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(describe(request.Release))),
+			anthropic.NewUserMessage(anthropic.NewTextBlock(request.Subject.Describe())),
 		},
 	})
 	if err != nil {
@@ -84,12 +84,6 @@ func (c *ClaudeChecker) Check(ctx context.Context, request CheckRequest) (Verdic
 	}
 
 	return parseVerdict(text.String(), request.Actions)
-}
-
-func describe(release Release) string {
-	return fmt.Sprintf(
-		"Version: %s\nCommit: %s\nTitle: %s\nChangelog: %s\nDiff: %s",
-		release.Version, release.Commit, release.Title, release.Changelog, release.DiffStat)
 }
 
 // parseVerdict reads the model's answer and checks it against what the step
