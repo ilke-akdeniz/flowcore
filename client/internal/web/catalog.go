@@ -60,36 +60,101 @@ type workflowPage struct {
 	// is editable but not runnable, which the library refuses at Start rather than
 	// at edit time.
 	Startable bool
-	// EntryStepID as a string, because template `eq` compares basic kinds and a
-	// uuid.UUID is a byte array.
+	// EntryStepID and SelectedID are strings because template `eq` compares basic
+	// kinds and a uuid.UUID is a byte array.
 	EntryStepID string
+	SelectedID  string
+	// Selected is the step being edited, or nil when none is chosen. The graph is
+	// the navigation: clicking a node picks the step this panel edits.
+	Selected *flowcore.StepDefinition
+	// FirstStatusID seeds the quick "add step" form, which asks only for a name.
+	FirstStatusID string
 }
 
 func (s *Server) showWorkflow(w http.ResponseWriter, r *http.Request) {
+	page, ok := s.buildEditor(w, r, "")
+	if !ok {
+		return
+	}
+
+	s.render(w, "workflow.html", page)
+}
+
+// showEditorFragment serves just the editor, for HTMX. Selecting a step is a
+// navigation, so it swaps the same fragment every edit returns.
+func (s *Server) showEditorFragment(w http.ResponseWriter, r *http.Request) {
+	page, ok := s.buildEditor(w, r, "")
+	if !ok {
+		return
+	}
+
+	s.render(w, "editor", page)
+}
+
+// buildEditor assembles the editor's view of a definition, including which step is
+// selected. A missing or unknown selection leaves Selected nil, which the template
+// renders as a prompt rather than an error.
+func (s *Server) buildEditor(w http.ResponseWriter, r *http.Request, message string) (workflowPage, bool) {
 	session := sessionFrom(r)
 
 	definitionID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.NotFound(w, r)
 
-		return
+		return workflowPage{}, false
 	}
 
 	definition, err := s.app.Definition(r.Context(), session, definitionID)
 	if err != nil {
 		s.toWorkflows(w, r, err)
 
-		return
+		return workflowPage{}, false
 	}
 
-	s.render(w, "workflow.html", workflowPage{
-		page:        s.newPage(r, session),
-		Definition:  definition,
-		Mermaid:     app.Mermaid(definition),
-		Assignable:  app.AssignableReferences(),
-		Startable:   definition.InitialStepDefinitionID != nil,
-		EntryStepID: entryStepID(definition),
-	})
+	page := s.newPage(r, session)
+	if message != "" {
+		page.Error = message
+	}
+
+	selectedID := r.URL.Query().Get("step")
+
+	var selected *flowcore.StepDefinition
+	for i := range definition.Steps {
+		if definition.Steps[i].ID.String() == selectedID {
+			selected = &definition.Steps[i]
+		}
+	}
+
+	// Default to the entry step, so the panel is never empty on arrival.
+	if selected == nil && len(definition.Steps) > 0 {
+		selected = &definition.Steps[0]
+		for i := range definition.Steps {
+			if definition.Steps[i].ID.String() == entryStepID(definition) {
+				selected = &definition.Steps[i]
+			}
+		}
+	}
+
+	firstStatus := ""
+	if len(definition.Statuses) > 0 {
+		firstStatus = definition.Statuses[0].ID.String()
+	}
+
+	if selected != nil {
+		selectedID = selected.ID.String()
+	}
+
+	return workflowPage{
+		page:          page,
+		Definition:    definition,
+		Mermaid:       app.Mermaid(definition),
+		Assignable:    app.AssignableReferences(),
+		Startable:     definition.InitialStepDefinitionID != nil,
+		EntryStepID:   entryStepID(definition),
+		SelectedID:    selectedID,
+		Selected:      selected,
+		FirstStatusID: firstStatus,
+	}, true
 }
 
 // edit runs one catalog change and returns to the editor, carrying any error.
@@ -107,15 +172,30 @@ func (s *Server) edit(w http.ResponseWriter, r *http.Request, change func(*app.S
 		return
 	}
 
+	message := ""
 	if err := change(session, definitionID); err != nil {
 		s.logger.Warn("edit rejected", "path", r.URL.Path, "err", err)
-		http.Redirect(w, r, "/workflows/"+definitionID.String()+
-			"?error="+url.QueryEscape(app.ErrorMessage(err)), http.StatusSeeOther)
+		message = app.ErrorMessage(err)
+	}
+
+	// With HTMX the whole editor comes back and is swapped in place: one fragment,
+	// always internally consistent, and no page reload. Without it — scripting off,
+	// or a plain curl — the same handler falls back to a redirect, so nothing here
+	// depends on JavaScript to work.
+	if r.Header.Get("HX-Request") == "true" {
+		if page, ok := s.buildEditor(w, r, message); ok {
+			s.render(w, "editor", page)
+		}
 
 		return
 	}
 
-	http.Redirect(w, r, "/workflows/"+definitionID.String(), http.StatusSeeOther)
+	target := "/workflows/" + definitionID.String()
+	if message != "" {
+		target += "?error=" + url.QueryEscape(message)
+	}
+
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (s *Server) toWorkflows(w http.ResponseWriter, r *http.Request, cause error) {

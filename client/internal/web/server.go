@@ -56,6 +56,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /workflows", s.showWorkflows)
 	mux.HandleFunc("POST /workflows", s.createWorkflow)
 	mux.HandleFunc("GET /workflows/{id}", s.showWorkflow)
+	mux.HandleFunc("GET /workflows/{id}/fragment", s.showEditorFragment)
 	mux.HandleFunc("POST /workflows/{id}/rename", s.renameWorkflow)
 	mux.HandleFunc("POST /workflows/{id}/entry", s.setEntryStep)
 	mux.HandleFunc("POST /workflows/{id}/statuses", s.addStatus)
@@ -357,6 +358,21 @@ func templateFuncs() template.FuncMap {
 			}
 
 			return "/subject/" + parts[1] + "/" + parts[2]
+		},
+		// stepName resolves an action's destination to a name, so the editor can say
+		// "approve → finance review" rather than showing an id.
+		"stepName": func(definition flowcore.WorkflowDefinition, id *uuid.UUID) string {
+			if id == nil {
+				return ""
+			}
+
+			for _, step := range definition.Steps {
+				if step.ID == *id {
+					return step.Name
+				}
+			}
+
+			return "(deleted)"
 		},
 		// subjectID is the half of a subject's own reference that is not its kind.
 		"subjectID": func(subject app.Subject) string {

@@ -297,3 +297,50 @@ unsure whether it was considered or careless. The rule holds everywhere else her
 
 **Consequence.**
 The exception is exactly this signature, not a general licence for short names in the web layer.
+
+---
+
+## 9. The editor was rebuilt to actually use the stack decision 2 chose
+
+**Context.**
+Shown the finished client, the owner's verdict on the workflow editor was that it looked
+unsalvageable "with current html thing" — specifically: a diagram, then oversized buttons, then a
+weird form, and a full page reload on every edit.
+
+**The finding that reframed it: there was no HTMX in the client at all.**
+Decision 2 chose HTMX and gave the reasons. Phase 2 then wrote "plain forms plus redirect for now,
+HTMX arrives when polling needs it", and it never arrived — so the editor shipped as nine separate
+forms doing nine full page reloads. That is precisely the *classic server-rendered* option decision 2
+considered and rejected by name.
+
+So the interface being judged was not the one that was chosen, and "server-rendered HTML cannot do
+this" was a conclusion drawn from a stack nobody had built.
+
+**Options.**
+Rebuild the editor on the chosen stack.
+Abandon server rendering for a React canvas, as decision 2 had priced at roughly twice the cost.
+
+**Decision.**
+Rebuild. Each of the three complaints had a cause that was not the stack:
+
+- *Page reloads* — HTMX absent. Edits now `hx-post` and swap the whole editor fragment in place.
+- *Oversized buttons* — Pico styles every `<button>` inside a form as full width. One rule opts out.
+- *The weird form* — the layout was four stacked forms inside a fieldset per step, all on screen at
+  once. Now the step list is the navigation and one step is edited in a panel beside the graph.
+
+**Why the whole fragment rather than fine-grained swaps.**
+Every edit returns the entire editor and replaces it. A status rename changes the picker, the step
+form's dropdown, the action targets and the diagram, so partial updates would mean four coordinated
+swaps and a chance of them disagreeing. One fragment is always internally consistent, and at roughly
+10 KB against a 23 KB page the saving is real without the bookkeeping.
+
+**Consequence.**
+Errors now return inline with the fragment — a duplicate name renders in place at HTTP 200 rather
+than round-tripping through a redirect and a query parameter.
+
+Nothing depends on JavaScript: handlers check `HX-Request` and fall back to the redirect they used
+before, so the editor still works with scripting off. That fallback is why this was a rebuild of the
+presentation rather than of the application.
+
+The React question stays open and unchanged. What was rejected here is concluding it from an
+interface that never used the alternative.
