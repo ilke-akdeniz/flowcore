@@ -6,6 +6,10 @@ from it, or fork it as the starting point for a real one.
 It is not an SDK. FlowCore is a library you import, not a service you call, so there is
 nothing here that wraps it; this is an example of *being* the client.
 
+> **The UI layer is being rebuilt** on React, TypeScript and Mantine — see
+> [the slices](../docs/pending-tasks/client-ui-rebuild.md). What follows describes the HTMX UI it
+> replaces; the Go side underneath is unchanged.
+
 ## Run it
 
 ```

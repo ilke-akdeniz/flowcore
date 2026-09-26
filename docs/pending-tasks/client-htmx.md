@@ -9,6 +9,12 @@ It is called the *client*, not the *demo*, deliberately.
 "Demo" would undersell that.
 The risk is that `something/client` reads as an SDK in Go, so prose should say **reference client** — an application built on FlowCore, not a wrapper for calling it.
 
+**The UI half of this plan is superseded** by
+[client-ui-rebuild.md](client-ui-rebuild.md), settled 2026-09-25.
+This file is the HTMX era: the plan that built the client's first UI layer.
+Phases 1 to 6 below are complete, and the reasoning about the Go side still holds; the stack and the
+screens are overtaken.
+
 **The plan below is marked [agreed] and is binding.**
 Everything else here is context for it.
 

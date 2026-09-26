@@ -21,6 +21,24 @@ A later decision that reverses an earlier one gets its own entry and notes what 
 
 Decisions 1–7 were settled together in the design interview of 2026-09-21, before any code.
 
+## Orientation: one client, two UI layers
+
+The client has had two UI layers. The first was server-rendered Go templates with HTMX; the second,
+from decision 10 onward, is React with a JSON API. Only the UI layer was replaced — `internal/app`,
+which is the client's whole half of the boundary, carried over.
+
+So most of the early entries are still in force, and it is worth knowing which before reading them:
+
+| Entry | |
+| --- | --- |
+| 1 module lives in this repo · 4 agent queue dispatch · 5 detect-a-key checkers · 7 called the client · 8 `w, r` in handlers | **still in force** |
+| 6 per-session isolation | **in force, amended by 15** — database rows rather than memory |
+| 2 HTMX over an SPA | **superseded by 10** — and not because it was wrong; the goals changed |
+| 3 the release and claim scenarios | **superseded by 12** — claims and policy applications |
+| 9 the HTMX editor rebuild | **moot** — that UI layer is gone |
+
+Nothing is deleted or rewritten. This table is the map.
+
 ---
 
 ## 1. The client lives in this repository, as its own module
