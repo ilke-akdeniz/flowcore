@@ -344,3 +344,365 @@ presentation rather than of the application.
 
 The React question stays open and unchanged. What was rejected here is concluding it from an
 interface that never used the alternative.
+
+---
+
+## 10. Rebuilding the UI on React, and what that supersedes
+
+**Context.**
+Shown the finished HTMX client, the owner judged the interface bad, then narrowed the diagnosis to
+information architecture — "you are trying to do 10 different things in a single page" — and decided
+to rebuild on a modern front-end stack.
+
+The goals moved at the same time, and that is the part worth recording:
+
+1. A UI portfolio piece: a backend developer working competently with modern front-end tools.
+2. A workflow application showing what is possible with FlowCore, especially its AI steps.
+3. An extension of 2: configuring a workflow is part of the product, not a settings page.
+
+**Decision.**
+React, TypeScript and Vite, as a single-page application against a JSON API served by the existing
+Go binary. Vite builds to static assets, Go embeds them, and `go run .` still serves everything.
+
+**This supersedes decision 2, and not because decision 2 was wrong.**
+That entry priced a React front end at roughly twice the HTMX build and declined it. The estimate
+stands. What changed is that "UI portfolio" was not a goal when it was taken — it is now the first
+one, and it is judged precisely on the thing decision 2 economised on.
+
+**Why not Next.js.**
+No SSR need: an internal console has no SEO, no public pages, no first-paint pressure. It would add
+a Node runtime to production and a second deployment story for features this application does not
+use. SvelteKit is nicer to write and a weaker portfolio signal, because fewer reviewers can assess
+it at a glance.
+
+**Why the Go side barely moves.**
+`internal/app` is 2,242 lines of identity resolution, subject storage, agent dispatch, seeding and
+error translation. None of it is presentation. Only `internal/web` — 18 routes and five templates —
+is stack-specific.
+
+**Consequence.**
+A second toolchain: npm, a build step, `node_modules` beside a Go module with four dependencies.
+That is the cost decision 2 declined, accepted now for a reason that did not exist then.
+
+**One thing the rebuild is not.**
+The stack was not the reason the old editor read badly. Decision 9 records that the client shipped
+with no HTMX in it at all, so the interface being judged was the *classic server-rendered* option
+decision 2 had rejected by name. The rebuilt HTMX editor fixed the mechanics and the pages were
+still overloaded, which is what isolated the real problem as information architecture. React does
+not fix pages that do too much; the screen inventory in `system-design.md` does.
+
+---
+
+## 11. Mantine, and the goal it was chosen against
+
+**Context.**
+The component and styling layer decides whether an application looks bespoke or looks like a kit
+with someone's data in it. For goal 1 it matters more than the framework choice did.
+
+**Options.**
+Tailwind with shadcn/ui — copy-in primitives, assemble your own design system.
+Mantine — comprehensive, modern defaults.
+MUI — the safest "knows the standard tool" signal, unmistakably Material.
+Ant Design — purpose-built for dense internal consoles, and visually dated.
+
+**Decision.**
+Mantine.
+
+**Why, and the correction that produced it.**
+The first recommendation was Tailwind with shadcn/ui, on the argument that hand-assembled components
+read as design work rather than as a kit. The owner corrected the goal:
+
+> I'm a backend developer that can work with modern UI tools - libraries. I don't claim to be a
+> modern UI genious and this client app is trying to showcase that what a good app using flowcore
+> can do.
+
+That inverts the answer. Assembling a design system from primitives is what a front-end specialist
+does; for a backend developer it is a large amount of time spent on the part that is not the point,
+with a real risk of looking half-finished. Half-finished bespoke reads worse than a kit used well,
+and a kit used competently demonstrates judgment about what not to build.
+
+The stronger reason is in the owner's own sentence: the application exists to show what a good
+application *using FlowCore* can do. The queue, the case file, the graph and the AI steps landing are
+the subject. Hand-rolling a button component is time taken from them.
+
+**Consequence.**
+The saved effort goes into workflow features — which is what made a React Flow canvas worth building
+in decision 14, having been declined at twice the price under the previous stack.
+
+This is the second time in the same interview that a goal was inflated past what the owner stated;
+the first was treating the library's boundary as the client's purpose. Worth watching for.
+
+---
+
+## 12. A specific application, not a generic tool
+
+**Context.**
+With the teaching goal dropped, what is the client *for*? The previous one seeded two hardcoded Go
+types and let you configure any workflow — a canned demo wearing a configurable hat, since the
+configuration had nothing real to run against.
+
+**Options.**
+A richer canned demo with fixed domains.
+A generic workflow tool where subjects are things you create.
+One specific, realistic application for one domain.
+
+**Decision.**
+One specific application: an insurer's internal case console, handling **claims** and **new policy
+applications**.
+
+**Why, in the owner's words.**
+
+> As much as possible, the client should look like a real app. Not "generic tool", not "demo whatever
+> caller". It's a specific app... Designed the way a modern "insurance claim app" should look and
+> function. Then it integrates with flowcore.
+
+The recommendation that lost was the generic tool, argued on the grounds that it would show the
+library's flexibility — which is the dropped teaching goal again, in different clothing. A generic
+tool is *less* convincing, not more: nobody looks at a configurable widget and concludes the author
+builds good applications.
+
+**On the second submission type.**
+The first proposal was two claim sub-types routing to different workflows. The owner rejected it as
+"confusing and a weak example" and asked for two genuinely different kinds of submission with
+different documents. A **complaint** was proposed; the owner chose **new policy application**:
+"more realistic, who really files complaints with workflows, very few I would guess."
+
+**Consequence.**
+Claims carry the complex workflow, applications the simple one. The seeded data lives in the
+database rather than in Go types, so the application's own schema is real.
+
+Each seed is a workflow, a drafted submission, and **no workflow instance** — the owner's detail, and
+the sharpest one. A visitor's first action is submitting a draft, so they see the beginning rather
+than arriving mid-story, and everything after is their own doing.
+
+---
+
+## 13. The API speaks claims, not workflows
+
+**Context.**
+Where the domain logic lives once a browser is involved. This is the way a React rewrite most often
+goes wrong: business rules leak forward into the front end, one convenient call at a time.
+
+**Options.**
+Generic REST — `/api/workflows`, `/api/runs/{id}`, `/api/visits/{id}` — with React composing them.
+Endpoints shaped to screens, speaking the application's own vocabulary.
+
+**Decision.**
+The API speaks claims and applications. One request per screen, returning a composite: the case, its
+type-specific detail, its current step with the actions available, and its history. React never
+learns FlowCore's model.
+
+The workflow editor is the single carved-out exception. Its endpoints mirror `Catalog` closely,
+because that screen genuinely *is* about definitions, steps and actions, and it is the one place the
+library's vocabulary belongs on screen.
+
+**Why.**
+React renders; it does not orchestrate. There is no "fetch the state, then fetch the actions, then
+work out which are available" — that composition happens in Go, where a UI taking a shortcut cannot
+bypass it.
+
+`visitId` passes through the browser opaquely. The front end does not know what a visit is; it
+returns the value unchanged. That is what preserves FlowCore's stale-view protection without the
+client having to understand why it exists.
+
+`internal/app` survives nearly whole. It already assembles exactly this shape — subject from the
+client's own store, state from the library, identity resolved, errors translated. Today it hands
+that to a template; afterwards it marshals it to JSON. Workflow selection, agent dispatch and error
+translation all stay in Go.
+
+And goal 3 says the user should be looking at *claims*. Generic REST would drag the library's
+vocabulary into the front end, which is the opposite.
+
+**Consequence.**
+Endpoints are shaped to screens rather than to resources, so `/api/cases/{reference}` returns a
+composite that is not a table row, and a purist would call it un-RESTful. For an application with
+seven known screens, designing generic resources buys nothing and costs round trips. Accepted.
+
+---
+
+## 14. An auto-laid-out canvas, with no stored positions
+
+**Context.**
+The workflow editor becomes a React Flow canvas, which decision 2 had priced at roughly 2x under
+HTMX and declined. Under React the canvas is a library; what costs is reconciling graph edits back
+into `Catalog` calls, and that cost exists with or without a canvas.
+
+**The problem underneath it: FlowCore stores no coordinates.**
+A definition is steps and routing. It has no idea where anything sits on a page.
+
+**Options.**
+Free positioning, with the client storing `(definition_id, step_id, x, y)` in its own schema.
+Automatic layout computed from the graph, storing nothing.
+
+**Decision.**
+Automatic layout. Nodes cannot be dragged; edges are dragged between them to create actions, and a
+node is clicked to edit it.
+
+**Why.**
+Stored positions mean orphan rows when a step is deleted and missing positions when one is added
+through any other path — a permanent maintenance tax on something that is not the point.
+
+The diagram stays readable, which is goal 3's actual requirement. Hand-arranged graphs are tidy for
+about a week.
+
+And the read-only workflow view and the editor become one component in two modes, which is the
+split decision 16 records, implemented once.
+
+**Consequence.**
+An awkward edge crossing cannot be nudged, and a layout engine occasionally makes a choice a person
+would not. Tolerable at six to ten steps; worse as graphs grow.
+
+---
+
+## 15. Per-visitor copies, with a shared cast
+
+**Context.**
+Two agreed things collide. Seeds live in the database, which implies one dataset; hosting implies
+concurrent visitors. Together: two people sign in as Dana, open the same claim, and one settles it
+while the other is reading it.
+
+The previous client solved this with per-session isolation seeded through the API. Seeding in the
+database changes the shape of the problem.
+
+**Options.**
+A single shared dataset with a visible reset.
+Per-visitor copies of the seeded data.
+
+**Decision.**
+Per-visitor copies. On first arrival the client copies a template dataset into rows tagged with that
+visitor's session: the two workflows through `Catalog.Create`, the two drafted submissions, and their
+documents. The cast of users stays **shared and read-only**.
+
+**Why.**
+A shared dataset breaks the moment two people use it at once, and the point of this rebuild is that
+the application should not feel like a demonstration.
+
+Sign-in still means something: the roster is fixed, and what belongs to a visitor is the work rather
+than the people. There is one Dana Whitfield.
+
+It is the same principle the previous client used — the client owns tenancy because FlowCore has
+none — expressed in rows instead of in memory. `CLAUDE.md` names `tenant_id` as its canonical example
+of structure with no caller, and this is the caller arriving and still not needing it.
+
+**Consequence.**
+Seeding becomes a real operation rather than two `Create` calls, and every query grows a session
+filter — tenancy discipline that has to be kept honest. The existing session janitor grows to delete
+copied rows.
+
+---
+
+## 16. One active workflow per submission type, and read/edit split apart
+
+**Context.**
+Goal 3 asks for two things that pull in different directions: configure a workflow easily, and
+understand one easily. And with two submission types mapping to two workflows, "specify when a
+workflow applies" is otherwise trivial enough to be uninteresting.
+
+**Decision.**
+Each submission type points at one **active** workflow. Others are retired rather than deleted.
+Configuring when a workflow applies is: build it, then activate it for a type.
+
+Understanding and editing are **separate screens** — a read-only workflow view, and an editor.
+
+**Why the active pointer earns its place.**
+Activating a new workflow demonstrates something real: cases already running keep the workflow they
+started under, while new submissions get the new one. Two cases can sit side by side following
+different processes because one was submitted before the switch.
+
+That is FlowCore's snapshot invariant — one of the library's two founding principles — shown by
+using the application rather than explained in a footnote, and it costs nothing, because the library
+already guarantees it. The client only has to make the pointer changeable, and must never rewrite it
+on an existing submission.
+
+**Why the screens split.**
+Understanding wants one large uncluttered diagram; editing wants forms, dropdowns and destructive
+buttons. Putting both on one page is what produced the screen the owner called unsalvageable, and
+most visits to a workflow are to look at it rather than change it.
+
+**Consequence.**
+A copy action, an active flag, and a list showing which is live. A retired workflow with no runs left
+simply sits there; nothing collects it.
+
+---
+
+## 17. The test for keeping a step, and the two it cut
+
+**Context.**
+The claim workflow was proposed with nine steps. The owner asked for it to be simplified, and gave
+the test rather than the answer: "Remove cases where not much is demonstrated... What does 'legal
+review' and 'senior adjuster' demonstrate for the workflow?"
+
+**Decision.**
+Seven steps. `legal review` and `senior adjuster` are cut.
+
+**Why.**
+Audited against the test, every other step demonstrates something structural that no other step does:
+an AI entry step that branches; one side of the branch with a cross-over out; an AI step whose
+failure loops back for more input; the loop target, where an AI step is re-run on revised input; an
+AI step that diverts to a specialist; the main human decision with a cross-over back; and a side
+branch that rejoins the main path or terminates.
+
+The two that were cut are both "another human approves," which `adjuster review` already shows. They
+added a node to the diagram and a group to the cast and demonstrated nothing new.
+
+Escalation is not lost with them: `fraud referral` demonstrates it, and more interestingly than a
+more senior person looking at the same thing.
+
+**Consequence.**
+The cast loses `group:legal` and `group:senior-adjusters`.
+
+The new policy application workflow keeps its senior underwriter and stays at four steps. Its job is
+to be the simple one, and a plain referral is worth showing once — just not twice.
+
+The test itself is the durable part, and is worth applying to any step, screen or field proposed
+later: what does this demonstrate that something else does not already?
+
+---
+
+## 18. Sign-in with seeded accounts, rather than a switcher
+
+**Context.**
+Identity is faked. How it is faked is the first thing a visitor sees, and the previous client put a
+dropdown in the page header — unmistakably a demonstration affordance.
+
+**Decision.**
+A sign-in screen listing the seeded cast. Click a person, no password, a line saying these are demo
+accounts. Switching stays available from the account menu, where a real application puts it.
+
+**Why.**
+The shape is what makes an application read as software: every internal console starts at a sign-in.
+It is also honest — it does not pretend to authenticate.
+
+It fixes a real problem as well. Switching identity from the page header changed who you were while
+you were looking at someone else's work, which was quietly confusing.
+
+And it gives the application one place to explain itself — what this is, that it is built on
+FlowCore, a link to the repository — reaching every visitor without putting a word of it on a
+working screen. That is where the material deleted from every page actually belongs.
+
+**Consequence.**
+One extra click before anything is visible, and one more screen.
+
+---
+
+## 19. Documents are text records, not files
+
+**Context.**
+The claim workflow's first AI step judges whether the documents on file support the claim, so this
+decides both what the claim screen shows and what a model actually has to work with.
+
+**Decision.**
+A document is a row: name, kind, date received, and an optional body of text. No upload, no binary
+storage.
+
+**Why.**
+The documents that matter are prose. A police report and a repair estimate are what `narrative
+consistency` compares against the claimant's own account, so the text *is* the document. A photograph
+is a row with a name, a date and no body.
+
+It also makes the `awaiting documents` loop real rather than mimed: someone adds a document record
+and resubmits, and the AI step re-runs against a genuinely different file.
+
+**Consequence.**
+The claim file reads as a list of records rather than a folder of evidence. Photographs were already
+out of scope, so this is the honest version of that decision rather than a new concession.
