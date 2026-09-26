@@ -1,105 +1,104 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
-	"github.com/google/uuid"
+	"github.com/mike-akdeniz/flowcore/client/internal/store"
 )
 
-// Subject is the thing a workflow is about.
+// SubjectText renders a submission as the prose an agent step reads.
 //
-// The interface exists because FlowCore does not have one. The library stores a
-// reference string and a version token and nothing else, so it is equally happy
-// routing a software release or an insurance claim — and a client that only ever
-// handled one kind would demonstrate the opposite of that.
+// This is the console's whole contribution to an AI step. FlowCore holds an
+// opaque reference — "s7f3a2:claim:C-1042" — and nothing else, so the material a
+// model needs in order to judge anything has to be assembled here, from the
+// console's own tables.
 //
-// Everything below the Reference is invisible to the library. This is the whole
-// of "not a document store": the subject lives here, the workflow lives there,
-// and the only thing crossing between them is an opaque string.
-type Subject interface {
-	// Reference is what identifies this subject to the application, before the
-	// session prefix is added. "release:v2.4.0", "claim:C-1042".
-	Reference() string
-	// VersionToken is the revision a decision would be made against. FlowCore
-	// records it and never compares it; noticing that a subject moved on is the
-	// client's job.
-	VersionToken() string
-	// Kind selects which template renders it and which agent instructions apply.
-	Kind() string
-	// Title is a one-line label for lists.
-	Title() string
-	// Describe is what an agent step is shown. It is prose because the judgment
-	// being asked for is about prose.
-	Describe() string
+// It is also why the library cannot call a model itself, and not merely why it
+// chooses not to: it does not have this text and could not obtain it without
+// either storing subjects or calling back into its caller.
+func (a *App) SubjectText(ctx context.Context, sessionID, reference string) (string, error) {
+	kind, _, found := strings.Cut(reference, ":")
+	if !found {
+		return "", fmt.Errorf("malformed subject reference %q", reference)
+	}
+
+	submission, err := a.Store.SubmissionByReference(ctx, sessionID, referenceOf(reference))
+	if err != nil {
+		return "", err
+	}
+
+	switch store.SubmissionType(kind) {
+	case store.TypeClaim:
+		return a.claimText(ctx, submission)
+	case store.TypeApplication:
+		return a.applicationText(ctx, submission)
+	}
+
+	return "", fmt.Errorf("unknown submission kind %q", kind)
 }
 
-// Run pairs a subject with the definition its workflow started from.
-//
-// Both halves are needed to ask FlowCore anything: GetState is keyed by
-// {subject reference, definition id}, because one subject may have runs of
-// several different definitions open at once.
-type Run struct {
-	Subject      Subject
-	DefinitionID uuid.UUID
-}
+func (a *App) claimText(ctx context.Context, submission store.Submission) (string, error) {
+	detail, err := a.Store.ClaimDetail(ctx, submission.ID)
+	if err != nil {
+		return "", err
+	}
 
-// Release is a software release awaiting approval.
-type Release struct {
-	Version   string
-	Commit    string
-	TitleText string
-	Changelog string
-	DiffStat  string
-}
+	documents, err := a.Store.Documents(ctx, submission.ID)
+	if err != nil {
+		return "", err
+	}
 
-func (r Release) Reference() string    { return "release:" + r.Version }
-func (r Release) VersionToken() string { return r.Commit }
-func (r Release) Kind() string         { return "release" }
-func (r Release) Title() string        { return r.Version + " — " + r.TitleText }
+	var text strings.Builder
+	fmt.Fprintf(&text, "Claim: %s\nPolicy: %s\nClaimant: %s\nAmount: %s\nDate of incident: %s\n\n",
+		submission.Reference, detail.PolicyNumber, detail.ClaimantName,
+		detail.Amount, detail.OccurredAt.Format("2 January 2006"))
 
-func (r Release) Describe() string {
-	return fmt.Sprintf(
-		"Version: %s\nCommit: %s\nTitle: %s\nChangelog: %s\nDiff: %s",
-		r.Version, r.Commit, r.TitleText, r.Changelog, r.DiffStat)
-}
+	fmt.Fprintf(&text, "Claimant's account:\n%s\n\n", detail.IncidentNarrative)
 
-// Claim is a motor insurance claim awaiting assessment.
-//
-// Text only, deliberately. Photographs would be the obvious thing to add and they
-// would cost upload handling, storage, binary files in the repository, and vision
-// calls — for a judgment that reads perfectly well as prose. A claimant's account
-// contradicting the police report is exactly the kind of thing a model is for, and
-// it needs no image at all.
-type Claim struct {
-	Number       string
-	Revision     string
-	Policy       string
-	Amount       string
-	Incident     string
-	PoliceReport string
-	Documents    []string
-}
+	text.WriteString("Documents on file:\n")
+	for _, document := range documents {
+		fmt.Fprintf(&text, "- %s (%s, received %s)\n",
+			document.Name, document.Kind, document.ReceivedAt.Format("2 January 2006"))
 
-func (c Claim) Reference() string    { return "claim:" + c.Number }
-func (c Claim) VersionToken() string { return c.Revision }
-func (c Claim) Kind() string         { return "claim" }
-func (c Claim) Title() string        { return c.Number + " — " + c.Amount }
-
-func (c Claim) Describe() string {
-	documents := "none"
-	if len(c.Documents) > 0 {
-		documents = ""
-		for i, document := range c.Documents {
-			if i > 0 {
-				documents += ", "
-			}
-
-			documents += document
+		// A photograph is a row with no body. The ones that carry text are what
+		// the narrative-consistency step actually compares against the account
+		// above — the text is the document.
+		if document.Body != nil {
+			fmt.Fprintf(&text, "  %s\n", *document.Body)
 		}
 	}
 
+	return text.String(), nil
+}
+
+func (a *App) applicationText(ctx context.Context, submission store.Submission) (string, error) {
+	detail, err := a.Store.ApplicationDetail(ctx, submission.ID)
+	if err != nil {
+		return "", err
+	}
+
 	return fmt.Sprintf(
-		"Claim: %s\nPolicy: %s\nAmount: %s\nDocuments on file: %s\n\n"+
-			"Claimant's account:\n%s\n\nPolice report:\n%s",
-		c.Number, c.Policy, c.Amount, documents, c.Incident, c.PoliceReport)
+		"Application: %s\nProposer: %s\nCover: %s\nSum insured: %s\n\nDisclosures:\n%s",
+		submission.Reference, detail.ProposerName, detail.CoverType,
+		detail.SumInsured, detail.Disclosures), nil
+}
+
+// referenceOf strips the kind, leaving the console's own reference:
+// "claim:C-1042" becomes "C-1042".
+func referenceOf(reference string) string {
+	_, rest, found := strings.Cut(reference, ":")
+	if !found {
+		return reference
+	}
+
+	return rest
+}
+
+// SubjectReference is what FlowCore records for a submission: the session, the
+// kind, and the reference. Opaque to the library, and prefixed with the session
+// so two visitors working the same seeded claim have two separate runs.
+func SubjectReference(sessionID string, submission store.Submission) string {
+	return fmt.Sprintf("%s:%s:%s", sessionID, submission.Type, submission.Reference)
 }

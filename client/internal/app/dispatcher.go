@@ -81,13 +81,13 @@ func (d *Dispatcher) Start(ctx context.Context) {
 // Called with the state returned by Start and CompleteStep — which is the whole
 // point of case 4. Whoever advanced the run is already holding the answer to "is
 // the next step an agent's", so nothing has to poll to find out.
-func (d *Dispatcher) Dispatch(session *Session, definitionID uuid.UUID, state flowcore.WorkflowState) {
+func (d *Dispatcher) Dispatch(sessionID string, definitionID uuid.UUID, state flowcore.WorkflowState) {
 	if state.CurrentStep == nil || !IsAgent(state.CurrentStep.AssigneeID) {
 		return
 	}
 
 	d.enqueue(workItem{
-		SessionID:        session.ID,
+		SessionID:        sessionID,
 		SubjectReference: state.SubjectReference,
 		DefinitionID:     definitionID,
 		VisitID:          state.CurrentStep.VisitID,
@@ -163,13 +163,12 @@ func (d *Dispatcher) sweepOnce(ctx context.Context) {
 	}
 
 	for _, step := range assigned {
-		session, ok := d.app.Sessions.Get(sessionOf(step.SubjectReference))
-		if !ok || !session.Owns(step.WorkflowDefinitionID) {
-			continue
-		}
-
+		// Ownership is not re-checked here: the worklist was queried with this
+		// console's own agent references, so anything it returns is ours by
+		// construction. The session comes from the subject reference the console
+		// wrote.
 		d.enqueue(workItem{
-			SessionID:        session.ID,
+			SessionID:        sessionOf(step.SubjectReference),
 			SubjectReference: step.SubjectReference,
 			DefinitionID:     step.WorkflowDefinitionID,
 			VisitID:          step.VisitID,
@@ -189,11 +188,6 @@ func sessionOf(subjectReference string) string {
 // run does one agent step: read where the work stands, assemble what the checker
 // needs from both halves, decide, and record.
 func (d *Dispatcher) run(ctx context.Context, item workItem) {
-	session, ok := d.app.Sessions.Get(item.SessionID)
-	if !ok {
-		return
-	}
-
 	state, err := d.app.Engine.GetState(ctx, item.SubjectReference, item.DefinitionID)
 	if err != nil {
 		d.logger.Warn("agent step: reading state", "visit", item.VisitID, "err", err)
@@ -210,18 +204,23 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 		return
 	}
 
-	run, ok := session.RunFor(subjectOf(item.SubjectReference))
-	if !ok {
-		d.logger.Warn("agent step: no subject", "subject", item.SubjectReference)
+	// Both halves are needed, and only one comes from the library: FlowCore knows
+	// where the work is, the console knows what the work is about.
+	reference := subjectOf(item.SubjectReference)
+
+	subjectText, err := d.app.SubjectText(ctx, item.SessionID, reference)
+	if err != nil {
+		d.logger.Warn("agent step: no subject", "subject", item.SubjectReference, "err", err)
 
 		return
 	}
 
 	verdict, err := d.checker.Check(ctx, CheckRequest{
-		Agent:    state.CurrentStep.AssigneeID,
-		StepName: state.CurrentStep.Name,
-		Subject:  run.Subject,
-		Actions:  state.CurrentStep.Actions,
+		Agent:       state.CurrentStep.AssigneeID,
+		StepName:    state.CurrentStep.Name,
+		Reference:   reference,
+		SubjectText: subjectText,
+		Actions:     state.CurrentStep.Actions,
 	})
 	if err != nil {
 		// The visit stays open, so the sweep will try again and a person can step
@@ -231,19 +230,11 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 		return
 	}
 
-	trace := session.Tracer.Start("Worker runs " + state.CurrentStep.Name)
-	trace.Client("the web request that reached this step returned long ago")
-	trace.Client("assemble what the checker needs: the step and its actions from FlowCore, " +
-		"the subject from this application's own store")
-	trace.Client("ask %s (%s) → %q", state.CurrentStep.AssigneeID, d.checker.Mode(), verdict.Remark)
-	session.Tracer.Record(trace)
-
-	next, err := d.app.CompleteStep(ctx, session, Identity{Reference: state.CurrentStep.AssigneeID},
+	next, err := d.app.CompleteStep(ctx, Identity{Reference: state.CurrentStep.AssigneeID},
 		CompleteRequest{
-			VisitID:             item.VisitID,
-			ActionID:            verdict.ActionID,
-			Remark:              verdict.Remark,
-			SubjectVersionToken: run.Subject.VersionToken(),
+			VisitID:  item.VisitID,
+			ActionID: verdict.ActionID,
+			Remark:   verdict.Remark,
 		})
 	if err != nil {
 		d.logger.Warn("agent step: completing", "visit", item.VisitID, "err", err)
@@ -256,7 +247,7 @@ func (d *Dispatcher) run(ctx context.Context, item workItem) {
 
 	// The next step may be another agent's, which is how two agent steps run back
 	// to back without anything polling.
-	d.Dispatch(session, item.DefinitionID, next)
+	d.Dispatch(item.SessionID, item.DefinitionID, next)
 }
 
 // subjectOf strips the session prefix, leaving the subject's own reference:

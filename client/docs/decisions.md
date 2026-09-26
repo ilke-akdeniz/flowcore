@@ -669,8 +669,10 @@ more senior person looking at the same thing.
 **Consequence.**
 The cast loses `group:legal` and `group:senior-adjusters`.
 
-The new policy application workflow keeps its senior underwriter and stays at four steps. Its job is
-to be the simple one, and a plain referral is worth showing once — just not twice.
+The new policy application workflow keeps its senior underwriter and stays at three steps — a risk
+screen, an underwriter and a senior underwriter, which is the "an entry, 2 approvers, 1 ai step"
+the owner sketched. Its job is to be the simple one, and a plain referral is worth showing once —
+just not twice.
 
 The test itself is the durable part, and is worth applying to any step, screen or field proposed
 later: what does this demonstrate that something else does not already?

@@ -3,117 +3,155 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/mike-akdeniz/flowcore"
+	"github.com/mike-akdeniz/flowcore/client/internal/store"
 )
 
-// EnsureSeeded gives a session its starting content the first time it is seen.
+// SeedSession gives a visitor their own copy of the example data.
 //
-// Seeding happens per session on first request, never at startup. That is what
-// lets local and hosted use run the same code with no mode flag: alone on your
-// laptop you are simply the only session, and the isolation costs nothing.
+// Per-session copies exist because hosting means concurrent visitors: without
+// them, two people signing in as Dana would work the same claim and one would
+// settle it while the other was reading. The console owns tenancy because
+// FlowCore has none, which is the same arrangement the library's `CLAUDE.md`
+// describes when it names `tenant_id` as structure with no caller.
 //
-// Two scenarios, because one cannot show that the library does not care what a
-// workflow is about. They share no code below the definition — different steps,
-// different groups, different agents, different subjects — and the library treats
-// them identically.
-func (a *App) EnsureSeeded(ctx context.Context, session *Session) error {
-	if len(session.DefinitionIDs) > 0 {
-		return nil
-	}
-
-	if err := a.seed(ctx, session, releaseApprovalDefinition(), seededReleases()); err != nil {
+// Each example is a workflow, one drafted submission, and **no run**. The
+// visitor's first action is submitting the draft, so they watch the workflow
+// begin rather than arriving part-way through one.
+func (a *App) SeedSession(ctx context.Context, sessionID string) error {
+	if err := a.seedClaimExample(ctx, sessionID); err != nil {
 		return err
 	}
 
-	return a.seed(ctx, session, claimAssessmentDefinition(), seededClaims())
+	return a.seedApplicationExample(ctx, sessionID)
 }
 
-// seed creates one definition and starts a run of it for each subject.
-func (a *App) seed(ctx context.Context, session *Session, tree flowcore.WorkflowDefinition, subjects []Subject) error {
-	definition, err := a.Catalog.Create(ctx, tree)
+func (a *App) seedClaimExample(ctx context.Context, sessionID string) error {
+	definition, err := a.Catalog.Create(ctx, claimAssessmentDefinition())
 	if err != nil {
-		return fmt.Errorf("seed %s: %w", tree.Name, err)
+		return fmt.Errorf("seed claim workflow: %w", err)
 	}
 
-	session.DefinitionIDs = append(session.DefinitionIDs, definition.ID)
+	if err := a.register(ctx, sessionID, store.TypeClaim, definition); err != nil {
+		return err
+	}
 
-	for _, subject := range subjects {
-		session.Runs[subject.Reference()] = Run{Subject: subject, DefinitionID: definition.ID}
+	submissionID := uuid.Must(uuid.NewV7())
 
-		token := subject.VersionToken()
+	// A draft: no run, no workflow stamped, no subject reference. The schema
+	// enforces that those three are absent together.
+	if err := a.Store.InsertSubmission(ctx, store.Submission{
+		ID:        submissionID,
+		SessionID: sessionID,
+		Type:      store.TypeClaim,
+		Reference: "C-1042",
+		Status:    "draft",
+		CreatedAt: time.Now(),
+	}); err != nil {
+		return err
+	}
 
-		// The subject itself stayed in the line above. FlowCore gets the reference
-		// and the version token, and never learns what either one means.
-		state, err := a.Engine.Start(ctx, flowcore.StartParams{
-			WorkflowDefinitionID: definition.ID,
-			SubjectReference:     session.SubjectReference(subject),
-			SubjectVersionToken:  &token,
-		})
-		if err != nil {
-			return fmt.Errorf("start run for %s: %w", subject.Reference(), err)
+	if err := a.Store.InsertClaimDetail(ctx, store.ClaimDetail{
+		SubmissionID: submissionID,
+		PolicyNumber: "MP-90114",
+		ClaimantName: "Rosa Lindqvist",
+		Amount:       "11200.00",
+		OccurredAt:   date(2026, 9, 14),
+		IncidentNarrative: "The car was hit while parked overnight outside my house on the 14th. " +
+			"I found the damage when I came out at 07:00 and reported it straight away.",
+	}); err != nil {
+		return err
+	}
+
+	// The police report contradicts the account above on both the circumstances
+	// and the timing. That contradiction is what the narrative-consistency agent
+	// is for, and it is the reason this claim is the seeded one.
+	documents := []store.Document{
+		{
+			Name: "Repair estimate", Kind: "estimate", ReceivedAt: date(2026, 9, 16),
+			Body: text("Front nearside wing and door, replace and respray. Headlamp unit. " +
+				"Parts £6,940, labour £3,180, paint £1,080. Total £11,200."),
+		},
+		{
+			Name: "Police report", Kind: "police_report", ReceivedAt: date(2026, 9, 16),
+			Body: text("Report filed 16th at 11:40. Caller stated the vehicle was damaged in a " +
+				"collision while being driven on the evening of the 14th. No third party " +
+				"identified. No injuries reported."),
+		},
+		{Name: "Damage photographs", Kind: "photograph", ReceivedAt: date(2026, 9, 15)},
+	}
+
+	for _, document := range documents {
+		document.ID = uuid.Must(uuid.NewV7())
+		document.SubmissionID = submissionID
+
+		if err := a.Store.InsertDocument(ctx, document); err != nil {
+			return err
 		}
-
-		// The run now sits on an agent step with nobody attending it. Handing the
-		// state to the dispatcher is case-4 dispatch in one line: whoever advanced
-		// the run already knows whether an agent owns what comes next.
-		a.Dispatcher.Dispatch(session, definition.ID, state)
 	}
 
 	return nil
 }
 
-// seededReleases branch on the first agent's verdict, so one of each is needed to
-// show both paths: the low-risk one runs both agent steps and lands on QA, the
-// high-risk one escalates to security review where a person must decide.
-func seededReleases() []Subject {
-	return []Subject{
-		Release{
-			Version:   "v2.4.0",
-			Commit:    "a3f91c2",
-			TitleText: "Add rate limiting to the public API",
-			Changelog: "Adds per-key rate limiting. No breaking changes.",
-			DiffStat:  "14 files changed, 512 insertions(+), 38 deletions(-)",
-		},
-		Release{
-			Version:   "v2.5.0-rc1",
-			Commit:    "7d10b84",
-			TitleText: "Migrate session storage to Redis",
-			Changelog: "Internal refactor only.",
-			DiffStat:  "9 files changed, 214 insertions(+), 186 deletions(-)",
-		},
+func (a *App) seedApplicationExample(ctx context.Context, sessionID string) error {
+	definition, err := a.Catalog.Create(ctx, underwritingDefinition())
+	if err != nil {
+		return fmt.Errorf("seed underwriting workflow: %w", err)
 	}
+
+	if err := a.register(ctx, sessionID, store.TypeApplication, definition); err != nil {
+		return err
+	}
+
+	submissionID := uuid.Must(uuid.NewV7())
+
+	if err := a.Store.InsertSubmission(ctx, store.Submission{
+		ID:        submissionID,
+		SessionID: sessionID,
+		Type:      store.TypeApplication,
+		Reference: "P-2087",
+		Status:    "draft",
+		CreatedAt: time.Now(),
+	}); err != nil {
+		return err
+	}
+
+	return a.Store.InsertApplicationDetail(ctx, store.ApplicationDetail{
+		SubmissionID: submissionID,
+		ProposerName: "Halvard Aune",
+		CoverType:    "Comprehensive motor",
+		SumInsured:   "48000.00",
+		Disclosures: "Two speeding convictions in the last three years, most recently March. " +
+			"Vehicle is kept on the street. Business use one day a week. " +
+			"A previous insurer declined cover in 2023.",
+	})
 }
 
-// seededClaims do the same for the claim workflow: one that reads cleanly, and
-// one whose account does not match the police report.
-func seededClaims() []Subject {
-	return []Subject{
-		Claim{
-			Number:   "C-1042",
-			Revision: "r1",
-			Policy:   "MP-88213",
-			Amount:   "£3,480",
-			Incident: "I was stationary at the lights on Mill Road when a van went into " +
-				"the back of me at about 08:15 on the 3rd. The other driver admitted " +
-				"fault at the scene and we exchanged details.",
-			PoliceReport: "Attended Mill Road 08:31 on the 3rd following a report of a " +
-				"rear-end collision. Two vehicles, no injuries. Driver of vehicle 2 " +
-				"accepted responsibility at the scene.",
-			Documents: []string{"repair estimate", "photographs", "exchange of details"},
-		},
-		Claim{
-			Number:   "C-1043",
-			Revision: "r1",
-			Policy:   "MP-90114",
-			Amount:   "£11,200",
-			Incident: "The car was hit while parked overnight outside my house on the " +
-				"14th. I found the damage when I came out at 07:00 and reported it " +
-				"straight away.",
-			PoliceReport: "Report filed 16th at 11:40. Caller stated the vehicle was " +
-				"damaged in a collision while being driven on the evening of the 14th. " +
-				"No third party identified.",
-			Documents: []string{"repair estimate", "photographs", "police reference"},
-		},
-	}
+// register records which FlowCore definition serves which kind of submission.
+// FlowCore takes a definition id and starts a run; which definition a claim
+// should use is a question only the console can answer.
+func (a *App) register(
+	ctx context.Context,
+	sessionID string,
+	submissionType store.SubmissionType,
+	definition flowcore.WorkflowDefinition,
+) error {
+	return a.Store.RegisterWorkflow(ctx, store.RegisteredWorkflow{
+		ID:                   uuid.Must(uuid.NewV7()),
+		SessionID:            sessionID,
+		SubmissionType:       submissionType,
+		Name:                 definition.Name,
+		FlowcoreDefinitionID: definition.ID,
+		Active:               true,
+		CreatedAt:            time.Now(),
+	})
 }
+
+func date(year int, month time.Month, day int) time.Time {
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+func text(value string) *string { return &value }

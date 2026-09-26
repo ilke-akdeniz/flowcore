@@ -98,11 +98,9 @@ func (c CannedChecker) Check(_ context.Context, request CheckRequest) (Verdict, 
 		return Verdict{}, fmt.Errorf("no canned verdicts for %s", request.Agent)
 	}
 
-	reference := request.Subject.Reference()
-
-	scripted, ok := bySubject[reference]
+	scripted, ok := bySubject[request.Reference]
 	if !ok {
-		return Verdict{}, fmt.Errorf("no canned verdict for %s on %s", request.Agent, reference)
+		return Verdict{}, fmt.Errorf("no canned verdict for %s on %s", request.Agent, request.Reference)
 	}
 
 	actionID, err := actionNamed(request.Actions, scripted.action)

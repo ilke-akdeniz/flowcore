@@ -26,8 +26,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mike-akdeniz/flowcore"
+	"github.com/mike-akdeniz/flowcore/client/internal/api"
 	"github.com/mike-akdeniz/flowcore/client/internal/app"
-	"github.com/mike-akdeniz/flowcore/client/internal/web"
+	"github.com/mike-akdeniz/flowcore/client/internal/store"
 )
 
 func main() {
@@ -61,16 +62,31 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	logger.Info("schema applied")
+	// The console's own schema, in its own Postgres schema with its own migration
+	// history. Two independent sets of tables in one database.
+	if err := store.Migrate(ctx, pool); err != nil {
+		return err
+	}
+
+	logger.Info("schema applied", "schemas", "flowcore, console")
 
 	application := app.New(config, pool, logger)
+
+	// The cast is shared across every session, so it is seeded once rather than
+	// copied per visitor. Idempotent, so it runs on every boot.
+	if err := application.Store.SeedStaff(ctx); err != nil {
+		return err
+	}
+
 	application.StartJanitor(ctx, logger)
 	application.Dispatcher.Start(ctx)
 
-	server, err := web.NewServer(application, logger)
+	built, err := assets()
 	if err != nil {
 		return err
 	}
+
+	server := api.NewServer(application, logger, built)
 
 	httpServer := &http.Server{
 		Addr:              config.Addr,

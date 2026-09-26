@@ -86,6 +86,16 @@ Done when one queue carries both kinds and the two detail screens share nothing 
   delete steps and statuses, set the entry step.
 - Activate a workflow for a submission type.
 
+**Required, and easy to miss:** derive agent references and assignment targets from the
+**registered definitions in the database**, not from the Go templates in `internal/app/workflows.go`.
+
+Those templates exist to create rows during seeding and nothing more, but two callers still read
+them at runtime — `App.AgentReferences`, which the dispatcher's sweep uses to find stranded agent
+work, and `AssignableReferences`, which lists reassignment targets. Today the template and the
+database agree by construction, because nothing can edit a workflow. The moment this slice ships
+they diverge: a step assigned to `agent:something-new` would never be swept after a restart, and a
+new group would never appear as a reassignment target.
+
 Done when a workflow can be built and a type switched onto it — and cases already running keep the
 one they started under.
 

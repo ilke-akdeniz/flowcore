@@ -3,142 +3,20 @@ package app
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
-// Session is one visitor's private slice of the world.
+// NewSessionID mints an identifier for a visitor's own copy of the data.
 //
-// It exists because hosting means concurrent visitors sharing one database, and
-// without isolation the first person to delete a seeded workflow ruins it for
-// everyone after them. A reset button does not fix that — it only undoes damage
-// while causing more, wiping out whatever an active visitor was doing.
-//
-// Every field here is the client's own bookkeeping. FlowCore has no notion of a
-// session, no tenant column, and no opinion about any of this, which is the point:
-// `CLAUDE.md` names tenant_id as its canonical example of structure with no
-// caller, and this is the caller arriving and not needing it.
-type Session struct {
-	ID        string
-	CreatedAt time.Time
-	LastSeen  time.Time
-
-	// DefinitionIDs are the workflow definitions this session created.
-	//
-	// The client has to track these regardless, which is a happy accident rather
-	// than a design: Catalog has no List method, only Get(id), so there is no way
-	// to ask the library "what definitions exist" — and therefore no way to
-	// accidentally show one session another's work.
-	DefinitionIDs []uuid.UUID
-
-	// ActingAs is the roster member this visitor is currently acting as. It is
-	// the client's notion of "signed in", and FlowCore never learns it — only the
-	// opaque reference that reaches completedBy.
-	ActingAs string
-
-	// Runs is the subject store, keyed by the subject's own reference. FlowCore
-	// holds only an opaque string like "s7f3a2:claim:C-1042" and never the claim
-	// itself, so somebody has to, and that somebody is the client.
-	Runs map[string]Run
-
-	// Tracer records what this application did and what it asked FlowCore, so the
-	// interface can show both sides of the boundary next to each other.
-	Tracer Tracer
-}
-
-// SubjectReference is what FlowCore records for a subject: opaque to the library,
-// and prefixed with the session so two visitors working the same seeded subject
-// have two separate runs.
-func (s *Session) SubjectReference(subject Subject) string {
-	return s.ID + ":" + subject.Reference()
-}
-
-// RunFor finds a run by the subject's own reference, without the session prefix.
-func (s *Session) RunFor(reference string) (Run, bool) {
-	run, ok := s.Runs[reference]
-
-	return run, ok
-}
-
-// SessionStore holds live sessions in memory.
-//
-// In memory on purpose: sessions are demonstration state, not records. Losing
-// them on restart costs a visitor a reseed, and persisting them would mean a
-// second storage story that teaches nothing about the library.
-type SessionStore struct {
-	mutex    sync.Mutex
-	sessions map[string]*Session
-}
-
-func NewSessionStore() *SessionStore {
-	return &SessionStore{sessions: make(map[string]*Session)}
-}
-
-// Get returns the session with this id, and whether it existed.
-func (s *SessionStore) Get(id string) (*Session, bool) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	session, ok := s.sessions[id]
-	if ok {
-		session.LastSeen = time.Now()
-	}
-
-	return session, ok
-}
-
-// Create makes a new session with a fresh id.
-func (s *SessionStore) Create() *Session {
-	now := time.Now()
-	session := &Session{
-		ID:        newSessionID(),
-		CreatedAt: now,
-		LastSeen:  now,
-		ActingAs:  Roster[0].Reference,
-		Runs:      make(map[string]Run),
-	}
-
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.sessions[session.ID] = session
-
-	return session
-}
-
-// Expired returns the sessions idle for longer than ttl, and forgets them. A zero
-// ttl returns nothing, which is how "never expire" is expressed.
-//
-// It returns them rather than deleting their data itself: the definitions belong
-// to FlowCore, so removing them is a Catalog call the caller makes.
-func (s *SessionStore) Expired(ttl time.Duration) []*Session {
-	if ttl == 0 {
-		return nil
-	}
-
-	cutoff := time.Now().Add(-ttl)
-
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	var expired []*Session
-	for id, session := range s.sessions {
-		if session.LastSeen.Before(cutoff) {
-			expired = append(expired, session)
-			delete(s.sessions, id)
-		}
-	}
-
-	return expired
-}
-
-func newSessionID() string {
+// Sessions themselves live in the console's database now, not in memory, because
+// the data they scope does. This is the only part of the old in-memory session
+// store that survived the move.
+func NewSessionID() string {
 	raw := make([]byte, 6)
 	if _, err := rand.Read(raw); err != nil {
-		// crypto/rand does not fail in practice, and a session id that collides
-		// is a cosmetic problem rather than a correctness one, so falling back to
-		// the clock is better than refusing to serve the page.
+		// crypto/rand does not fail in practice, and a colliding session id is a
+		// cosmetic problem rather than a correctness one, so falling back to the
+		// clock beats refusing to serve the page.
 		return "s" + time.Now().Format("150405.000000")
 	}
 

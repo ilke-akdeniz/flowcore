@@ -1,5 +1,8 @@
-# Binaries
-# Go names a binary after its directory, so each module's needs its own entry.
+# Binaries and build output
+# Go names a binary after its directory, so each module needs its own entry —
+# and so does any `-o` target, which is what `make build` uses. Unanchored `bin/`
+# catches the next one without anyone having to remember.
+bin/
 /flowcore
 /client/client
 *.exe

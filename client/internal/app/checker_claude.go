@@ -69,7 +69,7 @@ func (c *ClaudeChecker) Check(ctx context.Context, request CheckRequest) (Verdic
 		MaxTokens: 1024,
 		System:    []anthropic.TextBlockParam{{Text: system}},
 		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(request.Subject.Describe())),
+			anthropic.NewUserMessage(anthropic.NewTextBlock(request.SubjectText)),
 		},
 	})
 	if err != nil {

@@ -2,22 +2,10 @@ package app
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/mike-akdeniz/flowcore"
 )
-
-// Owns reports whether this definition belongs to this session.
-func (s *Session) Owns(definitionID uuid.UUID) bool {
-	for _, own := range s.DefinitionIDs {
-		if own == definitionID {
-			return true
-		}
-	}
-
-	return false
-}
 
 // Worklist returns the open steps waiting on this identity, within this session.
 //
@@ -31,29 +19,23 @@ func (s *Session) Owns(definitionID uuid.UUID) bool {
 // The filter is possible because AssignedStep carries WorkflowDefinitionID, so no
 // assignee string has to be namespaced: a visitor who types "group:security" into
 // the configuration form gets exactly that stored.
-func (a *App) Worklist(ctx context.Context, session *Session, identity Identity) ([]flowcore.AssignedStep, error) {
-	references := identity.WorklistReferences()
-
-	trace := session.Tracer.Start("Open " + identity.Name + "'s worklist")
-	trace.Client("resolve %s → %v (this person, plus their groups)", identity.Name, references)
-
-	assigned, err := a.Engine.ListAssignedSteps(ctx, references)
+func (a *App) Worklist(ctx context.Context, sessionID string, identity Identity) ([]flowcore.AssignedStep, error) {
+	assigned, err := a.Engine.ListAssignedSteps(ctx, identity.WorklistReferences())
 	if err != nil {
 		return nil, err
 	}
 
-	trace.Call("engine.ListAssignedSteps(%v)", references)
-	trace.Return("%d open steps, across every run in the database", len(assigned))
-
 	mine := make([]flowcore.AssignedStep, 0, len(assigned))
 	for _, step := range assigned {
-		if session.Owns(step.WorkflowDefinitionID) {
+		owned, err := a.owns(ctx, sessionID, step.WorkflowDefinitionID)
+		if err != nil {
+			return nil, err
+		}
+
+		if owned {
 			mine = append(mine, step)
 		}
 	}
-
-	trace.Client("filter to this session's own definitions → %d", len(mine))
-	session.Tracer.Record(trace)
 
 	return mine, nil
 }
@@ -79,7 +61,6 @@ type CompleteRequest struct {
 // completer simply need not be the assignee.
 func (a *App) CompleteStep(
 	ctx context.Context,
-	session *Session,
 	identity Identity,
 	request CompleteRequest,
 ) (flowcore.WorkflowState, error) {
@@ -97,27 +78,7 @@ func (a *App) CompleteStep(
 		params.SubjectVersionToken = &request.SubjectVersionToken
 	}
 
-	trace := session.Tracer.Start(identity.Label() + " completes a step")
-	trace.Client("resolve the signed-in visitor → %s", identity.Reference)
-	trace.Client("read the subject's current revision from this application's own store → %s",
-		request.SubjectVersionToken)
-	trace.Call("engine.CompleteStep(visit=%s, action=%s, completedBy=%q%s)",
-		short(request.VisitID.String()), short(request.ActionID.String()),
-		identity.Reference, remarkNote(request.Remark))
-
-	state, err := a.Engine.CompleteStep(ctx, params)
-	if err != nil {
-		trace.Return("refused: %s", ErrorMessage(err))
-		session.Tracer.Record(trace)
-
-		return state, err
-	}
-
-	trace.Return("%s", describeState(state))
-	trace.Client("%s", nextOwner(state))
-	session.Tracer.Record(trace)
-
-	return state, nil
+	return a.Engine.CompleteStep(ctx, params)
 }
 
 // Reassign moves an open visit to another assignee.
@@ -125,60 +86,8 @@ func (a *App) CompleteStep(
 // There is no unassign: FlowCore requires a value, and work with no assignee
 // would match no worklist query, so releasing it that way would hide it rather
 // than free it.
-func (a *App) Reassign(ctx context.Context, session *Session, visitID uuid.UUID, assignee string) (flowcore.WorkflowState, error) {
-	trace := session.Tracer.Start("Move a step to " + assignee)
-	trace.Call("engine.Reassign(visit=%s, assigneeID=%q)", short(visitID.String()), assignee)
-
-	state, err := a.Engine.Reassign(ctx, visitID, assignee)
-	if err != nil {
-		trace.Return("refused: %s", ErrorMessage(err))
-		session.Tracer.Record(trace)
-
-		return state, err
-	}
-
-	trace.Return("%s", describeState(state))
-	trace.Client("it now appears in whichever queue matches %q, and no other", assignee)
-	session.Tracer.Record(trace)
-
-	return state, nil
-}
-
-func short(id string) string {
-	if len(id) < 8 {
-		return id
-	}
-
-	return id[:8] + "…"
-}
-
-func remarkNote(remark string) string {
-	if remark == "" {
-		return ""
-	}
-
-	return ", remark=…"
-}
-
-func describeState(state flowcore.WorkflowState) string {
-	if state.CurrentStep == nil {
-		return fmt.Sprintf("run finished, status %q", state.WorkflowStatusName)
-	}
-
-	return fmt.Sprintf("status %q, now on %q assigned to %q",
-		state.WorkflowStatusName, state.CurrentStep.Name, state.CurrentStep.AssigneeID)
-}
-
-func nextOwner(state flowcore.WorkflowState) string {
-	if state.CurrentStep == nil {
-		return "nothing is open; the run is over"
-	}
-
-	if IsAgent(state.CurrentStep.AssigneeID) {
-		return "an agent owns the next step — queue it and return the response now"
-	}
-
-	return "render it into that group's queue; nothing runs until a person acts"
+func (a *App) Reassign(ctx context.Context, visitID uuid.UUID, assignee string) (flowcore.WorkflowState, error) {
+	return a.Engine.Reassign(ctx, visitID, assignee)
 }
 
 // AssignableReferences is every assignee the interface offers for reassignment:

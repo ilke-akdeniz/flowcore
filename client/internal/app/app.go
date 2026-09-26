@@ -6,8 +6,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mike-akdeniz/flowcore"
+	"github.com/mike-akdeniz/flowcore/client/internal/store"
 )
 
 // App is the client: everything on this side of the boundary, holding the two
@@ -17,20 +19,22 @@ import (
 // package — sessions, the subject store, seeding, later the agent dispatcher —
 // exists because FlowCore deliberately does none of it.
 type App struct {
-	Config   Config
-	Catalog  *flowcore.Catalog
-	Engine   *flowcore.Engine
-	Sessions *SessionStore
+	Config  Config
+	Catalog *flowcore.Catalog
+	Engine  *flowcore.Engine
+	// Store is the console's own data — submissions, documents, the roster, and
+	// which workflow serves which kind of submission. None of it is the library's.
+	Store *store.Store
 	// Dispatcher runs agent steps off the web request. Set by New.
 	Dispatcher *Dispatcher
 }
 
 func New(config Config, pool *pgxpool.Pool, logger *slog.Logger) *App {
 	application := &App{
-		Config:   config,
-		Catalog:  flowcore.NewCatalog(pool),
-		Engine:   flowcore.NewEngine(pool),
-		Sessions: NewSessionStore(),
+		Config:  config,
+		Catalog: flowcore.NewCatalog(pool),
+		Engine:  flowcore.NewEngine(pool),
+		Store:   store.New(pool),
 	}
 	application.Dispatcher = NewDispatcher(application, chooseChecker(logger), logger)
 
@@ -106,13 +110,43 @@ func (a *App) StartJanitor(ctx context.Context, logger *slog.Logger) {
 // each definition's statuses, steps and actions; the runs started from it are
 // instance-side and go with them.
 func (a *App) sweep(ctx context.Context, logger *slog.Logger) {
-	for _, session := range a.Sessions.Expired(a.Config.SessionTTL) {
-		for _, definitionID := range session.DefinitionIDs {
+	// Read the registry before the session row goes: deleting it cascades through
+	// the console's tables, and the definition ids would go with them.
+	expiring, err := a.expiringDefinitions(ctx)
+	if err != nil {
+		logger.Warn("sweep", "err", err)
+
+		return
+	}
+
+	for sessionID, definitionIDs := range expiring {
+		for _, definitionID := range definitionIDs {
 			if err := a.Catalog.DeleteWorkflowDefinition(ctx, definitionID); err != nil {
-				logger.Warn("expiring session", "session", session.ID, "definition", definitionID, "err", err)
+				logger.Warn("expiring session", "session", sessionID, "definition", definitionID, "err", err)
 			}
 		}
 
-		logger.Info("session expired", "session", session.ID, "definitions", len(session.DefinitionIDs))
+		logger.Info("session expired", "session", sessionID, "definitions", len(definitionIDs))
 	}
+}
+
+func (a *App) expiringDefinitions(ctx context.Context) (map[string][]uuid.UUID, error) {
+	sessions, err := a.Store.ExpiredSessions(ctx, a.Config.SessionTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	expiring := make(map[string][]uuid.UUID, len(sessions))
+	for _, sessionID := range sessions {
+		registered, err := a.Store.RegisteredWorkflows(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, workflow := range registered {
+			expiring[sessionID] = append(expiring[sessionID], workflow.FlowcoreDefinitionID)
+		}
+	}
+
+	return expiring, nil
 }

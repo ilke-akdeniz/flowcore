@@ -19,8 +19,13 @@ import (
 type CheckRequest struct {
 	Agent    string
 	StepName string
-	Subject  Subject
-	Actions  []flowcore.Action
+	// Reference identifies the subject to the console — "claim:C-1042". Used to
+	// look up a scripted answer when no model is configured.
+	Reference string
+	// SubjectText is the prose an agent step reads, assembled by the console from
+	// its own tables. FlowCore holds none of it.
+	SubjectText string
+	Actions     []flowcore.Action
 }
 
 // Verdict is an agent's answer: which action to take, and why.

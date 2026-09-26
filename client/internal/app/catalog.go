@@ -19,8 +19,13 @@ import (
 var ErrNotYours = errors.New("that workflow belongs to another session")
 
 // Definition reads one of this session's workflow definitions.
-func (a *App) Definition(ctx context.Context, session *Session, definitionID uuid.UUID) (flowcore.WorkflowDefinition, error) {
-	if !session.Owns(definitionID) {
+func (a *App) Definition(ctx context.Context, sessionID string, definitionID uuid.UUID) (flowcore.WorkflowDefinition, error) {
+	owned, err := a.owns(ctx, sessionID, definitionID)
+	if err != nil {
+		return flowcore.WorkflowDefinition{}, err
+	}
+
+	if !owned {
 		return flowcore.WorkflowDefinition{}, ErrNotYours
 	}
 
@@ -28,11 +33,15 @@ func (a *App) Definition(ctx context.Context, session *Session, definitionID uui
 }
 
 // Definitions reads every definition this session owns.
-func (a *App) Definitions(ctx context.Context, session *Session) ([]flowcore.WorkflowDefinition, error) {
-	definitions := make([]flowcore.WorkflowDefinition, 0, len(session.DefinitionIDs))
+func (a *App) Definitions(ctx context.Context, sessionID string) ([]flowcore.WorkflowDefinition, error) {
+	registered, err := a.Store.RegisteredWorkflows(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, id := range session.DefinitionIDs {
-		definition, err := a.Catalog.Get(ctx, id)
+	definitions := make([]flowcore.WorkflowDefinition, 0, len(registered))
+	for _, workflow := range registered {
+		definition, err := a.Catalog.Get(ctx, workflow.FlowcoreDefinitionID)
 		if err != nil {
 			return nil, err
 		}
@@ -41,6 +50,27 @@ func (a *App) Definitions(ctx context.Context, session *Session) ([]flowcore.Wor
 	}
 
 	return definitions, nil
+}
+
+// owns reports whether this session registered that definition.
+//
+// Authorization is the console's job and nothing below enforces it: FlowCore will
+// happily return any definition whose id you name, because it has no tenant, no
+// owner and no session. Every method here resolves ownership through the registry
+// before touching the library.
+func (a *App) owns(ctx context.Context, sessionID string, definitionID uuid.UUID) (bool, error) {
+	registered, err := a.Store.RegisteredWorkflows(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+
+	for _, workflow := range registered {
+		if workflow.FlowcoreDefinitionID == definitionID {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // NewDefinition is what the "new workflow" form collects.
@@ -57,7 +87,7 @@ type NewDefinition struct {
 }
 
 // CreateDefinition creates a workflow and records it against this session.
-func (a *App) CreateDefinition(ctx context.Context, session *Session, request NewDefinition) (flowcore.WorkflowDefinition, error) {
+func (a *App) CreateDefinition(ctx context.Context, sessionID string, request NewDefinition) (flowcore.WorkflowDefinition, error) {
 	statusID := uuid.Must(uuid.NewV7())
 	stepID := uuid.Must(uuid.NewV7())
 
@@ -80,8 +110,6 @@ func (a *App) CreateDefinition(ctx context.Context, session *Session, request Ne
 		return flowcore.WorkflowDefinition{}, err
 	}
 
-	session.DefinitionIDs = append(session.DefinitionIDs, definition.ID)
-
 	return definition, nil
 }
 
@@ -89,9 +117,9 @@ func (a *App) CreateDefinition(ctx context.Context, session *Session, request Ne
 // so ownership can be checked before anything is written. The extra read is the
 // price of the library having no opinion about who owns what.
 
-func (a *App) AddStatus(ctx context.Context, session *Session, definitionID uuid.UUID, name string) error {
-	if !session.Owns(definitionID) {
-		return ErrNotYours
+func (a *App) AddStatus(ctx context.Context, sessionID string, definitionID uuid.UUID, name string) error {
+	if err := a.mustOwn(ctx, sessionID, definitionID); err != nil {
+		return err
 	}
 
 	_, err := a.Catalog.AddStatus(ctx, definitionID, flowcore.AddStatusParams{Name: name})
@@ -99,8 +127,8 @@ func (a *App) AddStatus(ctx context.Context, session *Session, definitionID uuid
 	return err
 }
 
-func (a *App) DeleteStatus(ctx context.Context, session *Session, definitionID, statusID uuid.UUID) error {
-	if err := a.mustContain(ctx, session, definitionID, statusID, containsStatus); err != nil {
+func (a *App) DeleteStatus(ctx context.Context, sessionID string, definitionID, statusID uuid.UUID) error {
+	if err := a.mustContain(ctx, sessionID, definitionID, statusID, containsStatus); err != nil {
 		return err
 	}
 
@@ -114,9 +142,9 @@ type AddStepRequest struct {
 	AssigneeID string
 }
 
-func (a *App) AddStep(ctx context.Context, session *Session, definitionID uuid.UUID, request AddStepRequest) error {
-	if !session.Owns(definitionID) {
-		return ErrNotYours
+func (a *App) AddStep(ctx context.Context, sessionID string, definitionID uuid.UUID, request AddStepRequest) error {
+	if err := a.mustOwn(ctx, sessionID, definitionID); err != nil {
+		return err
 	}
 
 	_, err := a.Catalog.AddStep(ctx, definitionID, flowcore.AddStepParams{
@@ -128,8 +156,8 @@ func (a *App) AddStep(ctx context.Context, session *Session, definitionID uuid.U
 	return err
 }
 
-func (a *App) UpdateStep(ctx context.Context, session *Session, definitionID, stepID uuid.UUID, request AddStepRequest) error {
-	if err := a.mustContain(ctx, session, definitionID, stepID, containsStep); err != nil {
+func (a *App) UpdateStep(ctx context.Context, sessionID string, definitionID, stepID uuid.UUID, request AddStepRequest) error {
+	if err := a.mustContain(ctx, sessionID, definitionID, stepID, containsStep); err != nil {
 		return err
 	}
 
@@ -145,8 +173,8 @@ func (a *App) UpdateStep(ctx context.Context, session *Session, definitionID, st
 	return err
 }
 
-func (a *App) DeleteStep(ctx context.Context, session *Session, definitionID, stepID uuid.UUID) error {
-	if err := a.mustContain(ctx, session, definitionID, stepID, containsStep); err != nil {
+func (a *App) DeleteStep(ctx context.Context, sessionID string, definitionID, stepID uuid.UUID) error {
+	if err := a.mustContain(ctx, sessionID, definitionID, stepID, containsStep); err != nil {
 		return err
 	}
 
@@ -161,8 +189,8 @@ type AddActionRequest struct {
 	TerminalStatusID *uuid.UUID
 }
 
-func (a *App) AddAction(ctx context.Context, session *Session, definitionID, stepID uuid.UUID, request AddActionRequest) error {
-	if err := a.mustContain(ctx, session, definitionID, stepID, containsStep); err != nil {
+func (a *App) AddAction(ctx context.Context, sessionID string, definitionID, stepID uuid.UUID, request AddActionRequest) error {
+	if err := a.mustContain(ctx, sessionID, definitionID, stepID, containsStep); err != nil {
 		return err
 	}
 
@@ -175,8 +203,8 @@ func (a *App) AddAction(ctx context.Context, session *Session, definitionID, ste
 	return err
 }
 
-func (a *App) DeleteAction(ctx context.Context, session *Session, definitionID, actionID uuid.UUID) error {
-	if err := a.mustContain(ctx, session, definitionID, actionID, containsAction); err != nil {
+func (a *App) DeleteAction(ctx context.Context, sessionID string, definitionID, actionID uuid.UUID) error {
+	if err := a.mustContain(ctx, sessionID, definitionID, actionID, containsAction); err != nil {
 		return err
 	}
 
@@ -184,8 +212,8 @@ func (a *App) DeleteAction(ctx context.Context, session *Session, definitionID, 
 }
 
 // SetEntryStep changes where runs of this workflow begin.
-func (a *App) SetEntryStep(ctx context.Context, session *Session, definitionID, stepID uuid.UUID) error {
-	definition, err := a.Definition(ctx, session, definitionID)
+func (a *App) SetEntryStep(ctx context.Context, sessionID string, definitionID, stepID uuid.UUID) error {
+	definition, err := a.Definition(ctx, sessionID, definitionID)
 	if err != nil {
 		return err
 	}
@@ -203,8 +231,8 @@ func (a *App) SetEntryStep(ctx context.Context, session *Session, definitionID, 
 }
 
 // RenameDefinition changes the workflow's own name, keeping its entry step.
-func (a *App) RenameDefinition(ctx context.Context, session *Session, definitionID uuid.UUID, name string) error {
-	definition, err := a.Definition(ctx, session, definitionID)
+func (a *App) RenameDefinition(ctx context.Context, sessionID string, definitionID uuid.UUID, name string) error {
+	definition, err := a.Definition(ctx, sessionID, definitionID)
 	if err != nil {
 		return err
 	}
@@ -260,14 +288,28 @@ func containsAction(definition flowcore.WorkflowDefinition, id uuid.UUID) bool {
 
 // mustContain is the authorization check in one place: the session owns the
 // definition, and the child really belongs to it.
-func (a *App) mustContain(ctx context.Context, session *Session, definitionID, childID uuid.UUID, has contains) error {
-	definition, err := a.Definition(ctx, session, definitionID)
+func (a *App) mustContain(ctx context.Context, sessionID string, definitionID, childID uuid.UUID, has contains) error {
+	definition, err := a.Definition(ctx, sessionID, definitionID)
 	if err != nil {
 		return err
 	}
 
 	if !has(definition, childID) {
 		return fmt.Errorf("%w: it is not part of %q", ErrNotYours, definition.Name)
+	}
+
+	return nil
+}
+
+// mustOwn is the ownership check where a caller needs only the error.
+func (a *App) mustOwn(ctx context.Context, sessionID string, definitionID uuid.UUID) error {
+	owned, err := a.owns(ctx, sessionID, definitionID)
+	if err != nil {
+		return err
+	}
+
+	if !owned {
+		return ErrNotYours
 	}
 
 	return nil
